@@ -207,6 +207,12 @@ development on [Ko-fi](https://ko-fi.com/lelonio).
 Requirements, build steps, signing, the architecture and notes on the code are
 in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
+## Multi-service planning
+
+The [Spotify and YouTube Premium plan](docs/MULTI_SERVICOS.md) combines five
+specialist analyses, the current architecture, provider restrictions and
+acceptance criteria. It is a proposal, not an implemented playback feature.
+
 ## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE).
