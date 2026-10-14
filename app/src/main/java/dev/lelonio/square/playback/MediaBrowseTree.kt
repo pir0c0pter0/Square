@@ -34,8 +34,6 @@ import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-const val PAUSE_LOCAL_COMMAND = "dev.lelonio.square.PAUSE_LOCAL"
-
 /**
  * The browse tree Android Auto (and any other `MediaBrowser`) reads.
  *
@@ -207,7 +205,6 @@ class MediaBrowseTree(
             .add(SessionCommand(CMD_REPEAT, Bundle.EMPTY))
             .add(SessionCommand(CMD_RADIO, Bundle.EMPTY))
             .add(SessionCommand(CMD_LIKE, Bundle.EMPTY))
-            .add(SessionCommand(PAUSE_LOCAL_COMMAND, Bundle.EMPTY))
             .build()
 
         return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -229,14 +226,6 @@ class MediaBrowseTree(
     ): ListenableFuture<SessionResult> {
         val player = session.player
         when (customCommand.customAction) {
-            PAUSE_LOCAL_COMMAND -> {
-                return try {
-                    if (player is LibrespotPlayer) player.pauseLocalPlayback() else player.pause()
-                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
-                } catch (_: Exception) {
-                    Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_UNKNOWN))
-                }
-            }
             dev.lelonio.square.data.SmartShuffle.COMMAND -> {
                 return scope.future {
                     try {

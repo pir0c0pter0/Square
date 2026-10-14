@@ -181,6 +181,9 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
             }
     }
 
+    override suspend fun savedTracks(): List<CatalogTrack> =
+        if (account.isSignedIn) tracksOf("$PLAYLIST_PREFIX$LIKED_MUSIC_ID") else emptyList()
+
     /**
      * The albums in the account's library.
      *

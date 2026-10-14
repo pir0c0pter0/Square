@@ -50,7 +50,8 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
      * session every catalogue call would fail against.
      */
     override val isReady: Boolean
-        get() = container.spotifySignedIn && NativeBridge.isConnected
+        get() = container.spotifySignedIn && NativeBridge.isConnected &&
+            container.nativeSessionRevision == container.tokenStore.sessionRevision.value
 
     override suspend fun refreshAuth() {
         if (!container.spotifySignedIn) {
@@ -116,6 +117,7 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
      * a screen of its own, with the same purple cover Spotify's own clients use.
      */
     private suspend fun likedSongs(): CatalogPlaylist? {
+        if (container.nativeSessionRevision != container.tokenStore.sessionRevision.value) return null
         val uri = withContext(Dispatchers.IO) {
             runCatching { NativeBridge.collectionUri() }.getOrDefault("")
         }
@@ -139,16 +141,22 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
         }
 
     private suspend fun rootlist(): List<CatalogPlaylist> =
-        runCatching { Catalog.playlists() }
+        runCatching {
+            check(container.nativeSessionRevision == container.tokenStore.sessionRevision.value)
+            Catalog.playlists()
+        }
             .recoverCatching {
                 check(container.webApi.isReady) { it.message ?: "rootlist non disponibile" }
-                container.api.playlists(limit = WEB_API_LIBRARY_PAGE).items.map { dto ->
-                    CatalogPlaylist(
-                        uri = dto.uri,
-                        name = dto.name,
-                        artworkUrl = dto.images.firstOrNull()?.url,
-                    )
-                }
+                val gathered = mutableListOf<CatalogPlaylist>()
+                var offset = 0
+                do {
+                    val page = container.api.playlists(limit = WEB_API_LIBRARY_PAGE, offset = offset)
+                    gathered += page.items.map { dto ->
+                        CatalogPlaylist(dto.uri, dto.name, dto.images.firstOrNull()?.url)
+                    }
+                    offset += page.items.size
+                } while (page.items.isNotEmpty() && offset < page.total)
+                gathered.distinctBy { it.uri }
             }
             .getOrThrow()
 
@@ -195,19 +203,15 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
         // Liked Songs is not a context the access point will resolve either:
         // asked for it answers 503. So when both of these fail there is
         // nothing left to try.
-        uri.endsWith(":collection") ->
-            container.gateway.readAll { offset -> container.gateway.savedTracks(offset) } ?: run {
-                check(container.webApi.isReady) {
-                    container.getString(dev.lelonio.square.R.string.liked_songs_failed)
-                }
-                savedTracks()
-            }
+        uri.endsWith(":collection") -> savedTracks()
 
         else -> Catalog.tracks(Catalog.contextTrackUris(uri))
     }
 
     /** Everything the account has saved, newest first, a page at a time. */
-    private suspend fun savedTracks(): List<CatalogTrack> {
+    override suspend fun savedTracks(): List<CatalogTrack> {
+        if (isReady) container.gateway.readAll { offset -> container.gateway.savedTracks(offset) }?.let { return it }
+        check(container.webApi.isReady)
         val loaded = mutableListOf<CatalogTrack>()
         var offset = 0
         while (true) {
@@ -237,6 +241,36 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
             offset += page.items.size
             if (page.items.isEmpty() || offset >= page.total) return loaded
         }
+    }
+
+    override suspend fun savedAlbums(): List<CatalogPlaylist> {
+        if (!container.webApi.isReady) return emptyList()
+        val albums = mutableListOf<CatalogPlaylist>()
+        var offset = 0
+        do {
+            val page = container.api.savedAlbums(limit = 50, offset = offset)
+            albums += page.items.mapNotNull { saved ->
+                saved.album.uri?.let { CatalogPlaylist(it, saved.album.name, saved.album.images.firstOrNull()?.url) }
+            }
+            offset += page.items.size
+        } while (page.items.isNotEmpty() && offset < page.total)
+        return albums.distinctBy { it.uri }
+    }
+
+    override suspend fun followedArtists(): List<dev.lelonio.square.data.SearchItem> {
+        if (!container.webApi.isReady) return emptyList()
+        val artists = mutableListOf<dev.lelonio.square.data.SearchItem>()
+        var after: String? = null
+        do {
+            val page = container.api.followedArtists(after = after).artists
+            artists += page.items.mapNotNull { artist ->
+                artist.uri?.let { dev.lelonio.square.data.SearchItem(it, artist.name, "", artist.images.firstOrNull()?.url) }
+            }
+            val next = page.cursors?.after
+            if (page.items.isEmpty() || next == after) break
+            after = next
+        } while (after != null)
+        return artists.distinctBy { it.uri }
     }
 
     /**

@@ -19,9 +19,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -92,7 +94,7 @@ private enum class Layout { GRID, LIST }
 private enum class Order(val key: String, @StringRes val label: Int) {
     RECENT("recent", R.string.recently_opened),
     NAME("name", R.string.name),
-    ADDED("added", R.string.spotify_order),
+    ADDED("added", R.string.library_original_order),
 }
 
 /**
@@ -106,6 +108,7 @@ private enum class Order(val key: String, @StringRes val label: Int) {
 private enum class Filter(@StringRes val label: Int, @StringRes val count: Int) {
     ALL(R.string.library_all, R.string.item_count),
     PLAYLISTS(R.string.playlists, R.string.playlist_count),
+    SONGS(R.string.tracks, R.string.library_song_count),
     ARTISTS(R.string.artists, R.string.artist_count),
     ALBUMS(R.string.albums, R.string.album_count),
 }
@@ -135,6 +138,15 @@ fun LibraryScreen(
     pinned: List<String> = emptyList(),
     /** False when the source cannot be written to; see MusicBackend. */
     canEdit: Boolean = false,
+    canEditItem: (String) -> Boolean = { canEdit },
+    tracks: List<dev.lelonio.square.data.CatalogTrack> = emptyList(),
+    nowPlayingUri: String? = null,
+    onPlayTrack: (List<dev.lelonio.square.data.CatalogTrack>, Int) -> Unit = { _, _ -> },
+    onTrackMenu: (dev.lelonio.square.data.CatalogTrack) -> Unit = {},
+    loading: Boolean = false,
+    incomplete: Boolean = false,
+    offline: Boolean = false,
+    trackDownload: (dev.lelonio.square.data.CatalogTrack) -> dev.lelonio.square.data.DownloadState = { dev.lelonio.square.data.DownloadState.None },
     onCreatePlaylist: () -> Unit = {},
     /** Long press: rename and delete live in a sheet, like a track's actions. */
     onPlaylistMenu: (CatalogPlaylist) -> Unit = {},
@@ -237,10 +249,11 @@ fun LibraryScreen(
             // What the chips are asking for, before any sorting.
             val shown = remember(state.playlists, albums, artistItems, filter) {
                 when (filter) {
-                    Filter.ALL -> (state.playlists + albums).distinctBy { it.uri }
+                    Filter.ALL -> (state.playlists + albums + artistItems).distinctBy { it.uri }
                     Filter.PLAYLISTS -> state.playlists.distinctBy { it.uri }
                     Filter.ALBUMS -> albums.distinctBy { it.uri }
                     Filter.ARTISTS -> artistItems.distinctBy { it.uri }
+                    Filter.SONGS -> emptyList()
                 }
             }
 
@@ -251,6 +264,14 @@ fun LibraryScreen(
             val matching = remember(shown, query) {
                 if (query.isBlank()) shown
                 else shown.filter { it.name.contains(query.trim(), ignoreCase = true) }
+            }
+
+            val matchingTracks = remember(tracks, query, filter, order, descending) {
+                if (filter != Filter.ALL && filter != Filter.SONGS) emptyList()
+                else tracks.distinctBy { it.uri }
+                    .filter { query.isBlank() || it.name.contains(query.trim(), true) || it.artist.contains(query.trim(), true) }
+                    .let { if (order == Order.NAME) it.sortedBy { track -> track.name.lowercase() } else it }
+                    .let { if (descending) it.reversed() else it }
             }
 
             val playlists = remember(matching, playlistOrder, pinned, order, descending) {
@@ -311,7 +332,7 @@ fun LibraryScreen(
                     android.content.res.Configuration.ORIENTATION_LANDSCAPE
                 val heading: @Composable () -> Unit = {
                     Header(
-                        count = playlists.size,
+                        count = playlists.size + matchingTracks.size,
                         layout = layout,
                         order = order,
                         filter = filter,
@@ -331,6 +352,16 @@ fun LibraryScreen(
                     )
                 }
                 if (!sideways) heading()
+
+                if (loading) androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                if (incomplete) Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(stringResource(R.string.library_partial), style = MaterialTheme.typography.bodySmall,
+                        color = InkDim, modifier = Modifier.weight(1f))
+                    androidx.compose.material3.TextButton(onClick = onRetry) { Text(stringResource(R.string.retry)) }
+                }
 
                 val listPadding = PaddingValues(
                     start = 20.dp,
@@ -394,12 +425,20 @@ fun LibraryScreen(
                                 playlist,
                                 pinned = playlist.uri in pinned,
                                 onClick = { open(playlist, artists, onOpenPlaylist, onOpenArtist) },
-                                onLongClick = if (canEdit) {
+                                onLongClick = if (canEditItem(playlist.uri)) {
                                     { onPlaylistMenu(playlist) }
                                 } else {
                                     null
                                 },
                             )
+                        }
+                        itemsIndexed(matchingTracks, key = { _, track -> "song_${track.uri}" }, span = { _, _ -> GridItemSpan(maxLineSpan) }) { index, track ->
+                            TrackRow(track, index, track.uri == nowPlayingUri,
+                                onClick = { onPlayTrack(matchingTracks, index) },
+                                onMenu = { onTrackMenu(track) },
+                                download = trackDownload(track),
+                                unavailable = offline && !track.uri.startsWith("local:") &&
+                                    trackDownload(track) != dev.lelonio.square.data.DownloadState.Done)
                         }
                     }
 
@@ -453,12 +492,20 @@ fun LibraryScreen(
                                 playlist,
                                 pinned = playlist.uri in pinned,
                                 onClick = { open(playlist, artists, onOpenPlaylist, onOpenArtist) },
-                                onLongClick = if (canEdit) {
+                                onLongClick = if (canEditItem(playlist.uri)) {
                                     { onPlaylistMenu(playlist) }
                                 } else {
                                     null
                                 },
                             )
+                        }
+                        itemsIndexed(matchingTracks, key = { _, track -> "song_${track.uri}" }) { index, track ->
+                            TrackRow(track, index, track.uri == nowPlayingUri,
+                                onClick = { onPlayTrack(matchingTracks, index) },
+                                onMenu = { onTrackMenu(track) },
+                                download = trackDownload(track),
+                                unavailable = offline && !track.uri.startsWith("local:") &&
+                                    trackDownload(track) != dev.lelonio.square.data.DownloadState.Done)
                         }
                     }
                 }
@@ -636,15 +683,15 @@ private fun Header(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Filter.entries.forEach { entry ->
-                dev.lelonio.square.ui.components.FilterChip(
-                    label = stringResource(entry.label),
-                    selected = entry == filter,
-                    onClick = { onFilter(entry) },
-                )
+            LazyRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(Filter.entries) { entry ->
+                    dev.lelonio.square.ui.components.FilterChip(
+                        label = stringResource(entry.label),
+                        selected = entry == filter,
+                        onClick = { onFilter(entry) },
+                    )
+                }
             }
-
-            Spacer(Modifier.weight(1f))
 
             LiquidButton(
                 onClick = onSort,
@@ -703,7 +750,9 @@ private fun GridTile(
                 style = MaterialTheme.typography.titleMedium,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
+            dev.lelonio.square.ui.components.SourceIcon(playlist.uri, Modifier.padding(start = 6.dp))
         }
     }
 }
@@ -747,6 +796,7 @@ private fun ListRow(
                 .weight(1f),
         )
         if (pinned) PinMark()
+        dev.lelonio.square.ui.components.SourceIcon(playlist.uri, Modifier.padding(start = 8.dp))
     }
 }
 

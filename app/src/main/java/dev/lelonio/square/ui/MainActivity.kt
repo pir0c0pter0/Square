@@ -389,14 +389,22 @@ class MainActivity : ComponentActivity() {
     private fun enqueue(track: CatalogTrack) {
         val player = controller ?: return
         val wasEmpty = player.mediaItemCount == 0
+        if (!wasEmpty && dev.lelonio.square.backend.backendIdOf(track.uri) !=
+            dev.lelonio.square.backend.backendIdOf(player.currentMediaItem?.mediaId)
+        ) {
+            android.widget.Toast.makeText(this, dev.lelonio.square.R.string.queue_same_source, android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
         // The index is a formality: the item asks to play next and the queue in
         // the service picks the place, because only it knows where the run of
         // already-queued tracks ends.
-        player.addMediaItem(toMediaItem(track, playNext = true))
         if (wasEmpty) {
+            // Setting the first item lets the service select its source's player.
+            player.setMediaItem(toMediaItem(track, playNext = true))
             player.prepare()
             player.play()
         } else {
+            player.addMediaItem(toMediaItem(track, playNext = true))
             // Said, because nothing on screen changes: the song went somewhere
             // the listener cannot see from here.
             android.widget.Toast.makeText(

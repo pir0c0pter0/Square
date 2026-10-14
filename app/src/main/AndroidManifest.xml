@@ -36,12 +36,6 @@
       falls back to the chooser.
     -->
     <queries>
-        <!-- Only browsers are offered when an official music app is absent. -->
-        <intent>
-            <action android:name="android.intent.action.VIEW" />
-            <category android:name="android.intent.category.BROWSABLE" />
-            <data android:scheme="https" />
-        </intent>
         <package android:name="com.deniscerri.ytdl" />
         <intent>
             <action android:name="android.intent.action.SEND" />

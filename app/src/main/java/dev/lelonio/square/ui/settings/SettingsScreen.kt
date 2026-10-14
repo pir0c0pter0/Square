@@ -20,8 +20,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.annotation.StringRes
@@ -34,9 +32,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.draw.clip
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -153,10 +148,9 @@ fun SettingsScreen(
     onBack: () -> Unit,
     /** Opens the Google sign-in web view; see YouTubeLoginScreen. */
     onYouTubeSignIn: () -> Unit = {},
+    onSpotifySignIn: () -> Unit = {},
     /** After switching channel: the library and the home belong to the new one. */
     onYouTubeChannelChange: () -> Unit = {},
-    /** Pause only this device, preserving its queue before opening another app. */
-    onPausePlayback: suspend () -> Unit,
 ) {
     val ready = state as? MainViewModel.UiState.Ready
     val context = LocalContext.current
@@ -333,14 +327,11 @@ fun SettingsScreen(
             ) { goTo(it) }
         }
 
-        if (shown == SettingsPage.Services) item("external-services") {
-            ExternalServicesSection(onPausePlayback)
-        }
-
         // Who this is, before anything that can be done about it. Nothing else
         // on the page is worth as much room: the picture and the name answer
         // the question people open this page with.
-        if (shown == SettingsPage.Account && showSpotify) item("account") {
+        if (shown == SettingsPage.Account) item("account") {
+            val spotifyReady = ready?.takeIf { showSpotify }
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -349,8 +340,8 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 dev.lelonio.square.ui.components.ProfilePicture(
-                    url = ready?.avatarUrl,
-                    name = ready?.displayName,
+                    url = spotifyReady?.avatarUrl,
+                    name = spotifyReady?.displayName,
                     size = 96.dp,
                     modifier = Modifier
                         .size(96.dp)
@@ -358,30 +349,31 @@ fun SettingsScreen(
                     decodeSize = 96.dp,
                 )
                 Text(
-                    ready?.displayName ?: stringResource(R.string.not_connected),
+                    spotifyReady?.displayName ?: stringResource(R.string.backend_spotify),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    if (ready != null) {
-                        stringResource(R.string.playlist_count, ready.playlists.size)
+                    if (spotifyReady != null) {
+                        stringResource(R.string.playlist_count, spotifyReady.playlists.size)
                     } else {
-                        stringResource(R.string.log_in_to_resume)
+                        stringResource(if (app.spotifySignedIn) R.string.connected else R.string.not_connected)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = InkDim,
                 )
             }
-            Section(null) {
+            Section(stringResource(R.string.backend_spotify)) {
+                if (!app.spotifySignedIn) ActionRow(stringResource(R.string.log_in_with_spotify), false, onClick = onSpotifySignIn)
                 InfoRow(stringResource(R.string.connect_device), deviceName, icon = PhosphorIcons.Regular.DeviceMobile)
             }
         }
 
-        if (shown == SettingsPage.Account && showSpotify) groupHeading(Group.SETUP, open = "setup" in openGroups) { toggleGroup("setup") }
+        if (shown == SettingsPage.Account) groupHeading(Group.SETUP, open = "setup" in openGroups) { toggleGroup("setup") }
 
-        if (shown == SettingsPage.Account && showSpotify && "setup" in openGroups) groupItem("webapi", Group.SETUP) {
+        if (shown == SettingsPage.Account && "setup" in openGroups) groupItem("webapi", Group.SETUP) {
             Section(stringResource(R.string.web_api)) {
                 if (webApi.connected) {
                     InfoRow(stringResource(R.string.application), stringResource(R.string.connected))
@@ -401,7 +393,7 @@ fun SettingsScreen(
             }
         }
 
-        if (shown == SettingsPage.Account && showSpotify && "setup" in openGroups) groupItem("tutorial", Group.SETUP) {
+        if (shown == SettingsPage.Account && "setup" in openGroups) groupItem("tutorial", Group.SETUP) {
             Section(stringResource(R.string.guide)) {
                 ActionRow(stringResource(R.string.see_setup_again), destructive = false) {
                     onShowTutorial()
@@ -409,7 +401,7 @@ fun SettingsScreen(
             }
         }
 
-        if (shown == SettingsPage.Account && showSpotify && "setup" in openGroups) groupEnd(Group.SETUP)
+        if (shown == SettingsPage.Account && "setup" in openGroups) groupEnd(Group.SETUP)
 
         if (shown == SettingsPage.Playback) groupHeading(Group.SOUND, open = "sound" in openGroups) { toggleGroup("sound") }
 
@@ -945,7 +937,7 @@ fun SettingsScreen(
         // Spotify's sign-out, so only while Spotify is the source. On YouTube
         // Music the account section above has its own, and this one signed the
         // app out of Spotify from a page about a Google account.
-        if (ready != null && shown == SettingsPage.Account && showSpotify) {
+        if (app.spotifySignedIn && shown == SettingsPage.Account) {
             item("logout") {
                 Section(null) {
                     ActionRow(stringResource(R.string.log_out), destructive = true, onClick = onLogOut)
@@ -976,7 +968,6 @@ private enum class SettingsPage(
 ) {
     Account(R.string.account, R.string.page_account_summary, PhosphorIcons.Regular.UserCircle),
     Playback(R.string.page_playback, R.string.page_playback_summary, PhosphorIcons.Regular.Waveform),
-    Services(R.string.services_title, R.string.services_summary, PhosphorIcons.Regular.ArrowUpRight),
     // Its own page rather than a section of the app's: the preview has to stay
     // on screen while the numbers under it move, and a section inside a list
     // scrolls away. See GlassPage.
@@ -1271,79 +1262,6 @@ private fun PageRow(title: String, summary: String, onClick: () -> Unit) {
     }
 }
 
-@Composable
-private fun ExternalServicesSection(onPausePlayback: suspend () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var opening by remember { mutableStateOf(false) }
-    var pendingBrowser by rememberSaveable { mutableStateOf<ExternalMusicService?>(null) }
-    val failed = {
-        android.widget.Toast.makeText(context, R.string.services_open_failed, android.widget.Toast.LENGTH_LONG).show()
-    }
-    val open: (ExternalMusicService, Boolean) -> Unit = { service, browser ->
-        if (!opening) scope.launch {
-            opening = true
-            try {
-                val packages = if (browser) context.musicBrowsers() else listOf(service.packageName)
-                if (!context.openExternalMusic(service, packages, onPausePlayback)) {
-                    if (browser) failed() else pendingBrowser = service
-                }
-            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
-                failed()
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
-                throw cancelled
-            } catch (_: IllegalStateException) {
-                // A disconnected controller cannot pause safely: stay in Square.
-                failed()
-            } catch (_: SecurityException) {
-                failed()
-            } finally {
-                opening = false
-            }
-        }
-    }
-    Section(null) {
-        Text(
-            stringResource(R.string.services_note),
-            style = MaterialTheme.typography.bodyMedium,
-            color = InkDim,
-            modifier = Modifier.padding(18.dp),
-        )
-        ActionRow(stringResource(R.string.services_open_spotify), false, PhosphorIcons.Regular.ArrowUpRight, enabled = !opening) {
-            open(ExternalMusicService.SPOTIFY, false)
-        }
-        RowDivider()
-        ActionRow(stringResource(R.string.services_open_youtube), false, PhosphorIcons.Regular.ArrowUpRight, enabled = !opening) {
-            open(ExternalMusicService.YOUTUBE_MUSIC, false)
-        }
-        if (opening) Text(
-            stringResource(R.string.services_opening),
-            style = MaterialTheme.typography.bodySmall,
-            color = InkDim,
-            modifier = Modifier.padding(18.dp).semantics { liveRegion = LiveRegionMode.Polite },
-        )
-    }
-    pendingBrowser?.let { service ->
-        AlertDialog(
-            onDismissRequest = { pendingBrowser = null },
-            title = { Text(stringResource(R.string.services_browser_title)) },
-            text = {
-                val name = stringResource(if (service == ExternalMusicService.SPOTIFY)
-                    R.string.backend_spotify else R.string.backend_youtube)
-                Text(stringResource(R.string.services_browser_note, name))
-            },
-            confirmButton = {
-                TextButton(onClick = { pendingBrowser = null; open(service, true) }) {
-                    Text(stringResource(R.string.services_open_browser))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pendingBrowser = null }) { Text(stringResource(R.string.cancel)) }
-            },
-        )
-    }
-}
-
 /**
  * Which file the engine asks Spotify for.
  *
@@ -1402,7 +1320,6 @@ private fun YouTubeAccountSection(onSignIn: () -> Unit, onChannelChange: () -> U
         context.applicationContext as dev.lelonio.square.SquareApplication
     }
     val backend by app.preferences.backend.collectAsStateWithLifecycle()
-    if (backend != BackendId.YOUTUBE_MUSIC) return
 
     val account = remember(app) { app.youtubeAccount }
     val name by account.accountName.collectAsStateWithLifecycle()
@@ -2388,16 +2305,13 @@ private fun ActionRow(
     label: String,
     destructive: Boolean,
     icon: ImageVector? = null,
-    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     if (icon != null) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 48.dp)
-                .graphicsLayer { alpha = if (enabled) 1f else 0.5f }
-                .clickable(enabled = enabled, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+                .clickable(onClick = onClick)
                 .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -2420,7 +2334,7 @@ private fun ActionRow(
         color = if (destructive) MaterialTheme.colorScheme.error else Ink,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = enabled, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
+            .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 16.dp),
     )
 }

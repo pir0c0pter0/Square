@@ -1,210 +1,101 @@
-# Multi serviços: Spotify e YouTube Premium
+# Biblioteca geral: Spotify e YouTube Music
 
-Plano da issue #1, elaborado em 14/10/2026 com cinco especialistas: produto e
-experiência, arquitetura Android, Spotify, YouTube e segurança/validação.
-O planejamento foi seguido pela implementação da etapa 1, descrita abaixo.
+Implementação da issue #1, atualizada em 14/10/2026 após o pedido de uma
+biblioteca geral, com no máximo um ícone indicando a origem de cada item.
+Esta versão substitui os atalhos externos anteriores.
 
-## Etapa 1 implementada
+## Comportamento
 
-Configurações → Serviços oferece atalhos para os aplicativos oficiais Spotify
-e YouTube Music. Se o app não puder abrir, a pessoa pode confirmar a abertura
-do site em um navegador. A descoberta do navegador usa uma consulta HTTPS
-neutra, para funcionar mesmo quando Square recebe links Spotify por padrão.
+- Configurações → Conta permite conectar Spotify e Google independentemente
+  da fonte escolhida para Início e Busca.
+- Biblioteca reúne playlists, álbuns salvos, artistas seguidos e músicas
+  salvas/curtidas das duas contas. Os itens compartilham os mesmos filtros,
+  busca, ordenação e visualização em grade ou lista.
+- Um ícone pequeno identifica a origem do item, com descrição para leitor
+  de tela. Não há grupos separados por serviço nem prefixos nos títulos.
+- Abrir uma playlist ou tocar uma música escolhe o serviço pela URI do item,
+  sem exigir troca manual de fonte. Os menus usam essa mesma origem.
+- O filtro Músicas contém músicas salvas/curtidas; ele não percorre todas as
+  playlists para copiar suas faixas. Itens de mesmo nome em serviços diferentes
+  permanecem distintos. Repetições da mesma URI aparecem uma vez por coleção.
+- Uma falha em um serviço preserva os itens carregados do outro. A tela indica
+  carregamento e falha parcial, com opção de tentar novamente.
+- Sair ou trocar uma conta descarta seus itens e respostas antigas, preservando
+  a outra conta. A renovação normal de token não invalida a coleção.
 
-Antes da saída, a interface aguarda o processamento de um comando de pausa
-local no serviço de reprodução. O comando preserva a fila e não pausa outro
-dispositivo Connect. Controlador ausente, falha ou demora superior a cinco
-segundos impede a abertura. Não há retomada automática acrescentada ao retorno.
-No Web Playback SDK, a execução efetiva da pausa JavaScript continua assíncrona.
+## Reprodução e limites
 
-Há textos em português e inglês; os demais idiomas usam o fallback inglês.
-Botões reutilizam o estilo de Configurações, possuem papel acessível de botão
-e altura mínima de 48 dp. A implementação não lê novas contas ou assinaturas.
+A biblioteca é conjunta; a fila de reprodução continua sendo de uma origem
+por vez. Ao tocar uma música da outra origem, começa a fila desse serviço.
+Adicionar à fila só é oferecido no menu para a origem atual; os gestos de fila
+avisam quando é necessário tocar a música para trocar o serviço. Não há
+conversão de faixas entre serviços, transferência de playlists, assinatura
+conjunta nem crossfade entre provedores.
 
-### Revisão e verificação
+As integrações existentes do Square foram reutilizadas, sem servidor ou
+biblioteca de terceiros adicional. Como explicado no
+[README](../README.md#disclaimer), são integrações não oficiais e dependem de
+protocolos privados. Conectar uma conta Google não verifica assinatura
+Premium nem garante equivalência com os benefícios dos aplicativos oficiais.
 
-Cinco revisores examinaram Android/intents, playback, segurança, UX/acessibilidade
-e testes/requisitos. As revisões identificaram e levaram à correção da consulta
-de navegadores, pausa remota involuntária, controlador ausente e falha de pausa
-ocultada pelo motor Spotify.
+## Abordagem técnica
 
-Oito testes JUnit da lógica de abertura passaram em execução Kotlin/JVM isolada,
-incluindo espera pela pausa e cancelamento. O adaptador de intents compilou
-isoladamente contra classes Android. A tentativa de testes e compilação completa
-pelo Gradle foi bloqueada pela ausência do SDK Android; não houve execução em
-aparelho/emulador, TalkBack ou confirmação visual da tela.
+`LibraryContents` agrega as quatro coleções e elimina duplicações por URI.
+`MainViewModel` consulta os dois backends em paralelo, conserva resultados
+parciais da mesma sessão e invalida resultados quando a revisão da conta muda.
+Spotify percorre páginas da API para não limitar a biblioteca à primeira página;
+YouTube reutiliza a playlist de músicas curtidas da conta.
 
-Para executar pelo projeto em ambiente Android configurado:
+A URI já distingue Spotify, YouTube e arquivos locais. `backendFor(uri)` e
+`backendIdOf(uri)` reaproveitam essa identidade no catálogo, nos menus e no
+player. A preferência de descoberta não determina mais a origem desses itens.
+O motor Spotify pode permanecer pausado para consultar o catálogo enquanto
+YouTube toca. As trocas de player são serializadas; desligamento e saída da
+conta também encerram o motor estacionado.
 
-```bash
-./gradlew :app:testDebugUnitTest --tests dev.lelonio.square.ui.settings.ExternalMusicTest
-./gradlew :app:assembleDebug
-```
+## Revisão com cinco especialistas
 
-## Objetivo e interpretação
-
-Permitir que uma pessoa que usa Spotify e YouTube Premium tenha um ponto de
-acesso aos dois serviços. Interpreta-se “junto” como acesso no mesmo aplicativo,
-com escolha explícita do serviço, não como reprodução simultânea ou assinatura
-única. Cada assinatura, conta, cobrança e benefício continua no seu provedor.
-
-O YouTube Premium inclui YouTube Music Premium, mas isso não garante os mesmos
-benefícios dentro de clientes de terceiros. A referência para usar esses
-benefícios são os aplicativos e sites oficiais, conforme a
-[ajuda do YouTube Premium](https://support.google.com/youtube/answer/6308116?hl=pt-BR).
-
-## Decisão recomendada
-
-Começar com uma área de atalhos que abre Spotify e YouTube Music nos aplicativos
-oficiais, ou nos respectivos sites. Não conectar novas contas, consultar
-catálogos, receber credenciais nem controlar reprodução nessa primeira etapa.
-Essa é uma proposta conservadora de navegação, não uma declaração de aprovação
-pelos provedores. As integrações privadas existentes no Square não são prova de
-que um novo produto integrado seria autorizado.
-
-A [política do Spotify](https://developer.spotify.com/policy), seções III.5 e
-III.7, restringe integração com conteúdo de outros serviços e mistura de áudio.
-Sua seção IV.1 exige Premium para streaming musical pela plataforma. Assim,
-manter duas contas e um único áudio ativo não basta para considerar um player
-integrado permitido. A exceção para transferência de dados pessoais/metadados
-de playlists em III.9 também não autoriza reprodução conjunta.
-
-As [políticas das APIs do YouTube](https://developers.google.com/youtube/terms/developer-policies)
-restringem download sem autorização, separação de áudio/vídeo e reprodução em
-segundo plano por clientes dessas APIs. A
-[YouTube Data API](https://developers.google.com/youtube/v3/getting-started)
-oferece operações sobre recursos como vídeos e playlists; não deve ser tratada
-como uma API de áudio do YouTube Music Premium. Não foi identificado nas fontes
-consultadas um mecanismo público que transfira todos os benefícios Premium
-para o player nativo do Square.
-
-## Diagnóstico do Square atual
-
-Os caminhos abaixo são relativos a `app/src/main/java/dev/lelonio/square/`,
-exceto quando indicado. O diagnóstico foi feito com CodeGraph e a documentação
-do repositório; não representa teste com contas reais.
-
-| Componente | Comportamento existente | Consequência para o plano |
-|---|---|---|
-| `backend/MusicBackend.kt` | `BackendId` distingue Spotify e YouTube Music; cada backend reconhece suas URIs | Reutilizar essa identidade se uma integração interna for autorizada |
-| `SquareApplication.kt` | Mantém instâncias e credenciais dos dois serviços; `activeBackend` segue a preferência | As contas já têm armazenamento separado; não criar outro gerenciador |
-| `data/PreferencesStore.kt` | Guarda uma fonte selecionada | Hoje a experiência alterna Spotify ou YouTube Music |
-| `ui/settings/SettingsScreen.kt` | Escolhe fonte; seção Google só aparece com YouTube ativo | Coexistência interna exigiria tornar as duas contas acessíveis |
-| `playback/PlaybackService.kt` | Troca reprodutor; encerra motor Spotify ao entrar no YouTube | Não existe roteamento geral de fila mista por origem |
-| `data/PlaybackStore.kt` | Guarda uma fila na chave `state` | Tocar em outro serviço pode substituir a fila anterior |
-| `auth/SpotifyOAuth.kt`, `auth/WebApiAccount.kt` | OAuth com PKCE e sessões para finalidades distintas | Não confundir login do motor privado com autorização da API oficial |
-| `backend/youtube/YouTubeAccount.kt` | Sessão Google por cookies e estado do canal | Login não comprova assinatura Premium |
-| `data/Gateway.kt` | Catálogo específico do Spotify | Não transformá-lo em agregador dos serviços |
-| `app/src/main/AndroidManifest.xml` | Square recebe links Spotify | Um atalho externo precisa evitar abrir o próprio Square novamente |
-
-O [README](../README.md#disclaimer) já informa que o projeto usa protocolo Spotify
-reimplementado e endpoints privados do YouTube Music. O plano não apresenta
-esses caminhos como integrações oficiais nem propõe ampliá-los para oferecer
-benefícios Premium.
-
-## Pareceres dos cinco especialistas
-
-| Especialidade | Recomendação incorporada |
+| Especialidade | Pontos revisados e correções incorporadas |
 |---|---|
-| 1. Produto e experiência | Escolha clara do serviço; não prometer assinatura conjunta, catálogo mesclado ou versão equivalente de uma faixa |
-| 2. Arquitetura Android | Reaproveitar navegação e componentes existentes; não mexer nos motores para construir atalhos |
-| 3. Spotify | Usar aplicativo oficial inicialmente; condicionar integração interna ao aceite do caso de uso pelo provedor |
-| 4. YouTube Premium | Distinguir conta conectada de assinatura; benefícios ficam no ambiente oficial, sem deduzir Premium de cookie |
-| 5. Segurança e validação | Não coletar segredos no hub; validar destino dos links, ausência de aplicativo e isolamento de sessões em etapa futura |
+| Android | Liberação do motor estacionado, cancelamento de conexão e troca de conta |
+| Reprodução | Persistência da fila YouTube, Spotify remoto e uma reprodução local ativa |
+| Segurança | Isolamento de contas, invalidação do cache e rejeição de respostas antigas |
+| Experiência | Um ícone por item, contas acessíveis, menus pela origem e estados offline |
+| Qualidade | Mesclagem por URI, paginação e cenários de falha parcial e troca de origem |
 
-## Experiência da primeira versão
+As revisões são estáticas, não testes com contas reais.
 
-1. Em Configurações, abrir uma seção “Serviços”. Mostrar “Abrir Spotify” e
-   “Abrir YouTube Music”, com explicação curta de que cada conta e assinatura
-   é gerenciada no serviço escolhido.
-2. Ao tocar, pausar a reprodução local do Square antes de sair, sem apagar sua
-   fila. Não iniciar áudio automaticamente no destino nem comandar o outro app.
-3. Abrir o aplicativo oficial com destino explícito. Se não estiver disponível,
-   oferecer abertura do site oficial em navegador. Se nenhum destino puder
-   abrir, informar o erro e permanecer no Square.
-4. Ao voltar, manter a reprodução do Square pausada; a pessoa decide retomá-la.
-   Não inferir estado, conta ou assinatura do aplicativo externo.
+## Como validar em Android
 
-Destinos iniciais fixos: `https://open.spotify.com/` e
-`https://music.youtube.com/`. Não aceitar links arbitrários nessa versão.
-Evitar um `ACTION_VIEW` implícito que retorne ao Square: usar o pacote oficial
-quando disponível e um navegador para o fallback. Tratar falha de abertura
-mesmo após verificar disponibilidade. Seguir os
-[intents comuns do Android](https://developer.android.com/guide/components/intents-common)
-e a [visibilidade de pacotes](https://developer.android.com/training/package-visibility).
+1. Conectar Spotify e Google em Configurações → Conta. Abrir Biblioteca e
+   confirmar playlists, álbuns, artistas e músicas das duas contas juntos.
+2. Usar os filtros, procurar título/artista e alternar grade/lista. Conferir
+   músicas de mesmo título em serviços diferentes e um único ícone de origem.
+3. Abrir e tocar uma playlist de cada origem sem mudar a fonte em Configurações.
+   Inverter a origem que toca e a origem do item cujo menu está aberto: download,
+   edição, artista e adicionar à playlist devem usar o item selecionado.
+4. Tentar adicionar à fila uma música de outra origem e confirmar a orientação;
+   tocar nela deve trocar o player. Testar fila vazia, pausa e retomada.
+5. Impedir acesso a um dos serviços, atualizar a biblioteca e confirmar que o
+   outro permanece. Restabelecer acesso e usar Tentar novamente.
+6. Sair apenas do Spotify, conferir que os itens Google permanecem e entrar com
+   outra conta Spotify. Repetir para Google, inclusive durante o carregamento.
+7. Reiniciar durante reprodução YouTube, alternar serviços rapidamente e sair
+   do Spotify durante conexão. Conferir fila, posição, silêncio do motor
+   estacionado e controle Spotify remoto.
+8. Testar arquivos locais, downloads sem rede, fonte ampliada e TalkBack.
 
-## Etapas e condições de avanço
+## Verificação automatizada e pendências
 
-| Etapa | Entrega | Condição de saída |
-|---|---|---|
-| 0 — Planejamento | Diagnóstico, cinco pareceres, decisão, escopo e validação | Documento versionado |
-| 1 — Atalhos (implementada) | Seção Serviços e abertura externa, sem APIs ou novas contas | Validação A1–A5 em Android ainda pendente |
-| 2 — Viabilidade de integração | Confirmar por escrito com os provedores o caso de uso, permissões, distribuição e benefícios possíveis | Evidência de autorização e protótipo com APIs oficiais; se não viável, manter apenas os atalhos |
-| 3 — Integração interna, somente se autorizada | Duas contas independentes, busca/biblioteca por fonte e uma reprodução ativa | Critérios B1–B6, migração e testes com contas autorizadas |
+Há quatro testes de mesclagem e identidade em `LibraryContentsTest`: itens
+homônimos de serviços distintos, duplicação nas quatro coleções, origem vazia
+sem apagar a outra e identificação de URIs Spotify/YouTube/local.
 
-Não se atribuem prazos à autorização externa. A implementação dos atalhos usa
-Kotlin/Compose e intents existentes, sem servidor, banco novo ou dependência
-adicional. A tela fica em `ui/settings/SettingsScreen.kt`; a lógica e os intents
-ficam nos arquivos `ExternalMusic.kt` e `ExternalMusicLauncher.kt` da mesma pasta.
-`ui/SquareApp.kt` aguarda o comando local de `playback/MediaBrowseTree.kt`, que
-usou o caminho de pausa de `playback/LibrespotPlayer.kt`.
+A compilação Kotlin e os testes unitários usam o ferramental Android do projeto.
+Neste ambiente, o SDK 37 é distribuído como `android-37.0`, exigindo um script
+Gradle temporário para selecionar esse alvo; a tarefa `cargoBuild` foi excluída.
+Isso não valida o motor Rust nem gera um APK instalável.
 
-Se a etapa 3 for autorizada, reutilizar `MusicBackend`, `BackendId`, PKCE e
-armazenamentos independentes. O
-[fluxo PKCE do Spotify](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow)
-é apropriado para clientes sem segredo embutido. Usar identificação própria,
-permissões mínimas e respeitar as
-[quotas vigentes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes).
-Não garantir aprovação de expansão de usuários nem contornar limites criando
-aplicativos adicionais.
-
-Filas separadas exigiriam slots por serviço e por arquivos locais em
-`PlaybackStore`, com migração da chave antiga pela origem das URIs. Salvar pela
-origem do reprodutor efetivo, pois a preferência já pode ter mudado; serializar
-trocas em `PlaybackService`; restaurar somente uma fila inteiramente compatível
-e sempre pausada. O legado ambíguo deve ser preservado até resolver sua origem,
-sem descartar dados silenciosamente. Não duplicar um campo de provedor quando
-a URI já identifica a origem.
-
-Ficam fora do escopo: fila mista, sobreposição/crossfade entre serviços,
-sincronização bidirecional, substituição automática de músicas, downloads
-Premium por terceiros, cobrança conjunta e armazenamento central de cookies.
-
-## Critérios de aceitação e validação
-
-| ID | Cenário | Resultado esperado |
-|---|---|---|
-| A1 | Abrir cada atalho com os apps oficiais instalados | Abre o serviço escolhido; não retorna ao Square nem inicia áudio por comando do hub |
-| A2 | App ausente; navegador disponível | Oferece site oficial e abre somente após a ação da pessoa |
-| A3 | App/navegador indisponível ou abertura falha | Erro claro; Square continua utilizável e fila permanece intacta |
-| A4 | Square tocando antes do atalho; voltar ao Square | Áudio local pausa antes de sair e continua pausado ao voltar |
-| A5 | Revisar textos e persistência do hub | Não solicita credenciais nem mostra Premium como verificado; controles acessíveis por leitor de tela |
-| B1 | Conectar duas contas e reiniciar o app | Sessões independentes persistem; fonte atual continua identificada |
-| B2 | Alternar serviço e voltar | Uma reprodução ativa; cada fila e posição restaurada pausada, sem perder a outra |
-| B3 | Expirar/revogar/desconectar uma conta | Mensagem identifica o serviço; não remove a sessão do outro; apaga os dados pessoais aplicáveis à conta desconectada |
-| B4 | Migrar fila legada, vazia, local ou incompatível | Sem crash, perda silenciosa ou envio de URI ao reprodutor incorreto |
-| B5 | API sem autorização, indisponível ou limitada | Erro identificável; sem loop de login, repetição ilimitada ou troca automática de serviço |
-| B6 | Revisar logs, relatórios, armazenamento e consentimento | Sem tokens/cookies/senhas em logs ou URLs; permissões mínimas; operações de escrita explicitamente confirmadas |
-
-A1–A5 são a matriz mínima da etapa 1. Executar em Android 8 e Android 11+,
-incluindo leitor de tela, apps ausentes, falha de abertura e links Spotify com
-Square definido como receptor. B1–B6 só se aplicam à etapa autorizada; testar
-também troca rápida, encerramento do processo, acesso offline e conta sem
-benefício Premium. Os cenários Android são propostos; a execução isolada cobre
-a lógica de abertura.
-
-## Riscos e perguntas ainda abertas
-
-- Os provedores autorizariam o caso de uso e a distribuição pretendida? Sem
-  essa evidência, não iniciar reprodução integrada.
-- Quais benefícios YouTube Premium podem efetivamente ser oferecidos por um
-  cliente autorizado? Não prometer equivalência com o aplicativo oficial.
-- APIs, políticas, quotas e protocolos privados mudam. Revalidar fontes antes
-  de cada etapa; os links refletem a consulta de 14/10/2026.
-- Abertura externa depende da configuração Android. O hub não consegue
-  garantir que outro aplicativo estará autenticado ou que só haverá um áudio
-  ativo fora do Square.
-
-O próximo trabalho concreto é validar a etapa 1 em Android usando A1–A5.
-As etapas de integração interna permanecem condicionadas à autorização dos
-provedores e não foram habilitadas nesta implementação.
+A matriz Android acima permanece pendente: não há aparelho/emulador nem contas
+reais disponíveis nesta execução. A validação visual, TalkBack, áudio real e
+concorrência do motor nativo precisam ser feitas no dispositivo.

@@ -2874,7 +2874,7 @@ private const val PLAYING_FILM = 0.08f
 private const val PLAYING_RIM = 0.10f
 
 @Composable
-private fun TrackRow(
+internal fun TrackRow(
     track: CatalogTrack,
     position: Int,
     isCurrent: Boolean,
@@ -3061,6 +3061,7 @@ private fun TrackRow(
             }
         }
 
+        dev.lelonio.square.ui.components.SourceIcon(track.uri, Modifier.padding(horizontal = 6.dp))
         IconButton(onClick = onMenu, modifier = Modifier.size(32.dp)) {
             Icon(
                 PhosphorIcons.Bold.DotsThree,

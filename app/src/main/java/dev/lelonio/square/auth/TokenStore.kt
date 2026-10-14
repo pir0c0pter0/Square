@@ -54,6 +54,9 @@ class TokenStore(
      */
     private val refreshLock = lockFor(fileName)
 
+    private val _sessionRevision = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val sessionRevision: kotlinx.coroutines.flow.StateFlow<Int> = _sessionRevision
+
     private val _sessionLost = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     /**
@@ -86,7 +89,7 @@ class TokenStore(
      * leaves it — came back holding a token Spotify had already retired, was
      * told the session was revoked, and asked the user to sign in again.
      */
-    fun save(tokens: SpotifyOAuth.Tokens) {
+    fun save(tokens: SpotifyOAuth.Tokens, newSession: Boolean = true) {
         prefs.edit()
             .putString(KEY_ACCESS, tokens.accessToken)
             .apply {
@@ -94,9 +97,14 @@ class TokenStore(
             }
             .putLong(KEY_EXPIRES_AT, tokens.expiresAtMillis)
             .commit()
+        if (newSession) _sessionRevision.value++
     }
 
-    fun clear() = prefs.edit().clear().commit()
+    fun clear(): Boolean {
+        val cleared = prefs.edit().clear().commit()
+        _sessionRevision.value++
+        return cleared
+    }
 
     /**
      * Returns an access token valid for at least [SKEW_MILLIS], refreshing it
@@ -126,7 +134,7 @@ class TokenStore(
                 if (current != null && current != refreshToken) {
                     return@withLock currentIfFresh()
                         ?: SpotifyOAuth.refresh(current, clientId())
-                            .also(::save)
+                            .also { save(it, newSession = false) }
                             .accessToken
                 }
                 // Drop the dead session here rather than leaving callers to
@@ -136,7 +144,7 @@ class TokenStore(
                 _sessionLost.tryEmit(Unit)
                 throw e
             }
-            save(tokens)
+            save(tokens, newSession = false)
             tokens.accessToken
         }
     }
@@ -149,7 +157,7 @@ class TokenStore(
         val refreshToken = prefs.getString(KEY_REFRESH, null)
             ?: error("not logged in")
         val tokens = SpotifyOAuth.refresh(refreshToken, clientId())
-        save(tokens)
+        save(tokens, newSession = false)
         tokens.accessToken
     }
 

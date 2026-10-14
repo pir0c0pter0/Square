@@ -34,7 +34,6 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import kotlinx.coroutines.guava.await
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -465,7 +464,11 @@ fun SquareApp(
     val inPlaylists by viewModel.inPlaylists.collectAsStateWithLifecycle()
     val homeShelves by viewModel.homeShelves.collectAsStateWithLifecycle()
     val homeShelvesLoading by viewModel.homeShelvesLoading.collectAsStateWithLifecycle()
-    val remote = elsewhere?.takeIf { elsewhereActive }
+    val remote = elsewhere?.takeIf {
+        elsewhereActive && (dev.lelonio.square.backend.backendIdOf(local.mediaId)
+            ?: (context.applicationContext as dev.lelonio.square.SquareApplication).preferences.backend.value) ==
+                dev.lelonio.square.backend.BackendId.SPOTIFY
+    }
     val showConnectedDevice by (context.applicationContext as dev.lelonio.square.SquareApplication)
         .preferences.showConnectedDevice.collectAsStateWithLifecycle()
     val remoteLabel = stringResource(R.string.playing_on, remote?.deviceName.orEmpty())
@@ -894,6 +897,7 @@ fun SquareApp(
     /** False only until the source has been picked once; see BackendChoiceScreen. */
     val backendChosen by preferences.backendChosen.collectAsStateWithLifecycle()
     val backend by preferences.backend.collectAsStateWithLifecycle()
+    val playingBackend = dev.lelonio.square.backend.backendIdOf(playback.mediaId) ?: backend
     val youtubeHome by viewModel.youtubeHome.collectAsStateWithLifecycle()
     val sourceNew by viewModel.sourceNew.collectAsStateWithLifecycle()
     val sourceRadio by viewModel.sourceRadio.collectAsStateWithLifecycle()
@@ -1152,7 +1156,7 @@ fun SquareApp(
 
         lyrics = runCatching {
             (context.applicationContext as dev.lelonio.square.SquareApplication)
-                .activeBackend
+                .backendFor(uri)
                 .lyrics(
                     uri = uri,
                     title = currentTitle,
@@ -1876,12 +1880,39 @@ fun SquareApp(
                         }
 
                         composable(Routes.LIBRARY) {
-                            LaunchedEffect(backend, state is MainViewModel.UiState.Ready) { viewModel.syncListeningHistory() }
+                            val library by viewModel.generalLibrary.collectAsStateWithLifecycle()
+                            LaunchedEffect(state is MainViewModel.UiState.Ready, youtubeAccountName, webApi.connected) {
+                                viewModel.loadGeneralLibrary(force = true)
+                            }
                             LibraryScreen(
-                                state = state,
+                                state = MainViewModel.UiState.Ready("", library.contents.playlists),
+                                tracks = library.contents.tracks,
+                                nowPlayingUri = playback.mediaId,
+                                loading = library.loading,
+                                incomplete = library.incomplete,
+                                offline = offlineNow,
+                                trackDownload = { track ->
+                                    when {
+                                        track.uri in downloadedFiles -> dev.lelonio.square.data.DownloadState.Done
+                                        downloadProgress[track.uri] != null -> dev.lelonio.square.data.DownloadState.Running(downloadProgress.getValue(track.uri))
+                                        else -> dev.lelonio.square.data.DownloadState.None
+                                    }
+                                },
+                                canEditItem = { uri ->
+                                    (uri.startsWith("spotify:playlist:") || uri.startsWith("ytmusic:playlist:")) &&
+                                        uri != "ytmusic:playlist:LM" && viewModel.canRemoveFrom(uri)
+                                },
+                                onPlayTrack = { songs, index ->
+                                    val selected = songs[index]
+                                    val sameSource = songs.filter {
+                                        dev.lelonio.square.backend.backendIdOf(it.uri) == dev.lelonio.square.backend.backendIdOf(selected.uri)
+                                    }
+                                    onPlay(sameSource, sameSource.indexOf(selected), null, false, "", 0L)
+                                },
+                                onTrackMenu = { track -> trackMenu = TrackMenuRequest(track, removable = false) },
                                 contentPadding = listPadding,
                                 onLogIn = viewModel::logIn,
-                                onRetry = { viewModel.retryFailed() },
+                                onRetry = { viewModel.loadGeneralLibrary(force = true) },
                                 onGoOffline = viewModel::goOffline,
                                 onLogOut = viewModel::logOut,
                                 onOpenPlaylist = openList,
@@ -1897,11 +1928,10 @@ fun SquareApp(
                                     playlistMenuMine = it.mine != false
                                     playlistMenu = it
                                 },
-                                artists = followedArtists,
-                                albums = savedAlbums,
+                                artists = library.contents.artists,
+                                albums = library.contents.albums,
                                 onRetryOnline = viewModel::retryOnline,
-                                signInHint = backend == dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC &&
-                                    youtubeAccountName == null,
+                                signInHint = false,
                                 onSignIn = { showYouTubeLogin = true },
                                 onUseYouTube = {
                                     preferences.setBackend(dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC)
@@ -1935,20 +1965,9 @@ fun SquareApp(
                                 onShowTutorial = { showTutorial = true },
                                 language = language,
                                 onLanguage = setLanguage,
-                                onPausePlayback = {
-                                    val controller = checkNotNull(player as? androidx.media3.session.MediaController)
-                                    val result = kotlinx.coroutines.withTimeout(5_000) {
-                                        controller.sendCustomCommand(
-                                            androidx.media3.session.SessionCommand(
-                                                dev.lelonio.square.playback.PAUSE_LOCAL_COMMAND,
-                                                android.os.Bundle.EMPTY,
-                                            ), android.os.Bundle.EMPTY,
-                                        ).await()
-                                    }
-                                    check(result.resultCode == androidx.media3.session.SessionResult.RESULT_SUCCESS)
-                                },
                                 onBack = { navController.popBackStack() },
                                 onYouTubeSignIn = { showYouTubeLogin = true },
+                                onSpotifySignIn = viewModel::logIn,
                                 onYouTubeChannelChange = {
                                     // A different channel is a different
                                     // library and a different home: both were
@@ -3260,7 +3279,7 @@ fun SquareApp(
                                 onToggleLike = playback.mediaId
                                     ?.takeIf {
                                         it.startsWith("spotify:") &&
-                                            backend == dev.lelonio.square.backend.BackendId.SPOTIFY
+                                            playingBackend == dev.lelonio.square.backend.BackendId.SPOTIFY
                                     }
                                     ?.let { uri ->
                                     {
@@ -3275,8 +3294,8 @@ fun SquareApp(
                                 addToPlaylist = addToPlaylist,
                                 onPickPlaylist = viewModel::addToPlaylist,
                                 playlistEditAvailable =
-                                    backend == dev.lelonio.square.backend.BackendId.SPOTIFY ||
-                                        (viewModel.canEditPlaylists && !offlineNow &&
+                                    playingBackend == dev.lelonio.square.backend.BackendId.SPOTIFY ||
+                                        ((context.applicationContext as dev.lelonio.square.SquareApplication).backendFor(playback.mediaId).canEditPlaylists && !offlineNow &&
                                             playback.mediaId?.startsWith("ytmusic:track:") == true),
                                 onWatchVideo = player
                                     ?.takeIf {
@@ -3372,7 +3391,7 @@ fun SquareApp(
                         // The whole playlist in one link. yt-dlp and the apps
                         // built on it expand a playlist URL themselves, so this
                         // is the entire "download an album" feature.
-                        if (backend == dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC) {
+                        if (dev.lelonio.square.backend.backendIdOf(shownPlaylist.uri) == dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC) {
                             val label = if (downloaderInstalled(context)) {
                                 stringResource(R.string.download_with)
                             } else {
@@ -3558,19 +3577,24 @@ fun SquareApp(
                     onDismiss = { trackMenu = null },
                 ) {
                     if (menu != null) {
+                        val menuBackend = dev.lelonio.square.backend.backendIdOf(menu.track.uri)
                         TrackSheetAction(stringResource(R.string.play), PhosphorIcons.Fill.Play) {
                             trackMenu = null
                             onPlay(listOf(menu.track), 0, null, false, "", 0L)
                         }
-                        TrackSheetAction(stringResource(R.string.add_to_queue), PhosphorIcons.Regular.Queue) {
-                            trackMenu = null
-                            onEnqueue(menu.track)
+                        if (playback.mediaId == null || menuBackend ==
+                            dev.lelonio.square.backend.backendIdOf(playback.mediaId)
+                        ) {
+                            TrackSheetAction(stringResource(R.string.add_to_queue), PhosphorIcons.Regular.Queue) {
+                                trackMenu = null
+                                onEnqueue(menu.track)
+                            }
                         }
                         // Writing to a playlist needs the account: Spotify's
                         // Web API, or a signed-in YouTube Music. With no
                         // network the entry would only ever fail.
-                        if ((backend == dev.lelonio.square.backend.BackendId.SPOTIFY ||
-                                viewModel.canEditPlaylists) && !offlineNow
+                        if ((menuBackend == dev.lelonio.square.backend.BackendId.SPOTIFY ||
+                                (context.applicationContext as dev.lelonio.square.SquareApplication).backendFor(menu.track.uri).canEditPlaylists) && !offlineNow
                         ) {
                             TrackSheetAction(stringResource(R.string.add_to_playlist), PhosphorIcons.Regular.Plus) {
                                 trackMenu = null
@@ -3662,7 +3686,7 @@ fun SquareApp(
                         // YouTube only. A Spotify link handed to a downloader
                         // is a link it cannot do anything with, so offering the
                         // action there would be offering a failure.
-                        if (backend == dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC) {
+                        if (menuBackend == dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC) {
                             // Says which app it will open, and says the other
                             // thing when there is no app to open: a row that
                             // promised a download and delivered a web page

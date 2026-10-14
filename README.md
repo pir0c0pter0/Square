@@ -35,16 +35,15 @@
 
 ### Two sources, one app
 
-- **Spotify or YouTube Music**, chosen at first launch and switchable in the
-  settings. Home, search, the library and the player work the same on both.
+- **Spotify and YouTube Music in one library**: playlists, saved albums,
+  followed artists and saved/liked songs from both connected accounts. A small
+  source icon identifies each item; opening or playing it selects its service.
+  The source chosen in settings still controls home and search.
 - **Spotify**: your own account, with its playlists, library and Connect
   devices. Needs Premium.
 - **YouTube Music**: the whole catalogue and the music videos, with no account
   needed. Sign in with Google to bring in your playlists, albums and followed
   artists.
-- **Settings → Services**: open the official Spotify or YouTube Music app,
-  with a confirmed browser fallback. Square pauses its local playback and
-  keeps its queue; subscriptions remain managed by each service.
 
 ### Player
 
@@ -210,12 +209,11 @@ development on [Ko-fi](https://ko-fi.com/lelonio).
 Requirements, build steps, signing, the architecture and notes on the code are
 in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
-## Multi-service planning
+## Unified library
 
-The [Spotify and YouTube Premium plan](docs/MULTI_SERVICOS.md) combines five
-specialist analyses, the current architecture, provider restrictions and
-acceptance criteria. The initial service shortcuts are implemented; integrated
-multi-service playback remains conditional on provider authorization.
+Connect Spotify and Google independently in Settings → Account, then open
+Library to browse both collections together. The [multi-service guide](docs/MULTI_SERVICOS.md)
+describes the behavior, five specialist reviews and device validation steps.
 
 ## Licence
 
