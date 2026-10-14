@@ -20,6 +20,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.annotation.StringRes
@@ -32,6 +34,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.draw.clip
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -150,6 +155,8 @@ fun SettingsScreen(
     onYouTubeSignIn: () -> Unit = {},
     /** After switching channel: the library and the home belong to the new one. */
     onYouTubeChannelChange: () -> Unit = {},
+    /** Pause only this device, preserving its queue before opening another app. */
+    onPausePlayback: suspend () -> Unit,
 ) {
     val ready = state as? MainViewModel.UiState.Ready
     val context = LocalContext.current
@@ -324,6 +331,10 @@ fun SettingsScreen(
                 },
                 avatarUrl = ready?.avatarUrl?.takeUnless { signedOutOfYouTube },
             ) { goTo(it) }
+        }
+
+        if (shown == SettingsPage.Services) item("external-services") {
+            ExternalServicesSection(onPausePlayback)
         }
 
         // Who this is, before anything that can be done about it. Nothing else
@@ -965,6 +976,7 @@ private enum class SettingsPage(
 ) {
     Account(R.string.account, R.string.page_account_summary, PhosphorIcons.Regular.UserCircle),
     Playback(R.string.page_playback, R.string.page_playback_summary, PhosphorIcons.Regular.Waveform),
+    Services(R.string.services_title, R.string.services_summary, PhosphorIcons.Regular.ArrowUpRight),
     // Its own page rather than a section of the app's: the preview has to stay
     // on screen while the numbers under it move, and a section inside a list
     // scrolls away. See GlassPage.
@@ -1255,6 +1267,79 @@ private fun PageRow(title: String, summary: String, onClick: () -> Unit) {
             contentDescription = null,
             tint = InkDim,
             modifier = Modifier.size(18.dp),
+        )
+    }
+}
+
+@Composable
+private fun ExternalServicesSection(onPausePlayback: suspend () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var opening by remember { mutableStateOf(false) }
+    var pendingBrowser by rememberSaveable { mutableStateOf<ExternalMusicService?>(null) }
+    val failed = {
+        android.widget.Toast.makeText(context, R.string.services_open_failed, android.widget.Toast.LENGTH_LONG).show()
+    }
+    val open: (ExternalMusicService, Boolean) -> Unit = { service, browser ->
+        if (!opening) scope.launch {
+            opening = true
+            try {
+                val packages = if (browser) context.musicBrowsers() else listOf(service.packageName)
+                if (!context.openExternalMusic(service, packages, onPausePlayback)) {
+                    if (browser) failed() else pendingBrowser = service
+                }
+            } catch (_: kotlinx.coroutines.TimeoutCancellationException) {
+                failed()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: IllegalStateException) {
+                // A disconnected controller cannot pause safely: stay in Square.
+                failed()
+            } catch (_: SecurityException) {
+                failed()
+            } finally {
+                opening = false
+            }
+        }
+    }
+    Section(null) {
+        Text(
+            stringResource(R.string.services_note),
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkDim,
+            modifier = Modifier.padding(18.dp),
+        )
+        ActionRow(stringResource(R.string.services_open_spotify), false, PhosphorIcons.Regular.ArrowUpRight, enabled = !opening) {
+            open(ExternalMusicService.SPOTIFY, false)
+        }
+        RowDivider()
+        ActionRow(stringResource(R.string.services_open_youtube), false, PhosphorIcons.Regular.ArrowUpRight, enabled = !opening) {
+            open(ExternalMusicService.YOUTUBE_MUSIC, false)
+        }
+        if (opening) Text(
+            stringResource(R.string.services_opening),
+            style = MaterialTheme.typography.bodySmall,
+            color = InkDim,
+            modifier = Modifier.padding(18.dp).semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
+    pendingBrowser?.let { service ->
+        AlertDialog(
+            onDismissRequest = { pendingBrowser = null },
+            title = { Text(stringResource(R.string.services_browser_title)) },
+            text = {
+                val name = stringResource(if (service == ExternalMusicService.SPOTIFY)
+                    R.string.backend_spotify else R.string.backend_youtube)
+                Text(stringResource(R.string.services_browser_note, name))
+            },
+            confirmButton = {
+                TextButton(onClick = { pendingBrowser = null; open(service, true) }) {
+                    Text(stringResource(R.string.services_open_browser))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingBrowser = null }) { Text(stringResource(R.string.cancel)) }
+            },
         )
     }
 }
@@ -2303,13 +2388,16 @@ private fun ActionRow(
     label: String,
     destructive: Boolean,
     icon: ImageVector? = null,
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     if (icon != null) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .clickable(onClick = onClick)
+                .heightIn(min = 48.dp)
+                .graphicsLayer { alpha = if (enabled) 1f else 0.5f }
+                .clickable(enabled = enabled, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
                 .padding(horizontal = 18.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -2332,7 +2420,7 @@ private fun ActionRow(
         color = if (destructive) MaterialTheme.colorScheme.error else Ink,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = enabled, role = androidx.compose.ui.semantics.Role.Button, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 16.dp),
     )
 }

@@ -958,14 +958,28 @@ class LibrespotPlayer(
             // music back.
             onPlaybackActive(true)
         } else {
-            wantPlay = false
-            this.playWhenReady = false
-            onPlaybackActive(false)
-            focus.abandonFocus()
-            engine("pause") { NativeBridge.pause() }
-            invalidateState()
+            pauseLocally(strict = false)
         }
         return Futures.immediateVoidFuture()
+    }
+
+    /** Leaving Square must not pause another Connect device. Runs on the player thread. */
+    fun pauseLocalPlayback() {
+        if (remote == null) pauseLocally(strict = true)
+    }
+
+    private fun pauseLocally(strict: Boolean) {
+        wantPlay = false
+        playWhenReady = false
+        onPlaybackActive(false)
+        focus.abandonFocus()
+        if (strict) {
+            // A pending connection has no audio yet; wantPlay=false cancels its autoplay.
+            if (!awaitingEngine) NativeBridge.pause()
+        } else {
+            engine("pause") { NativeBridge.pause() }
+        }
+        invalidateState()
     }
 
     /**

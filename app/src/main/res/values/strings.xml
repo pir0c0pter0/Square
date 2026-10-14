@@ -670,4 +670,16 @@
     <string name="link_copied_open_browser">Couldn\'t open the browser. The link is copied: paste it there.</string>
     <string name="youtube_signing_in">Signing in…</string>
     <string name="youtube_sign_in_private">Your password goes only to Google. Square keeps the session Google gives back.</string>
+
+    <!-- Official music service shortcuts. -->
+    <string name="services_title">Services</string>
+    <string name="services_summary">Open Spotify and YouTube Music</string>
+    <string name="services_note">Open the official apps to use your accounts and subscriptions. Each service manages its own Premium benefits. Square pauses playback before opening another app.</string>
+    <string name="services_open_spotify">Open Spotify app</string>
+    <string name="services_open_youtube">Open YouTube Music app</string>
+    <string name="services_browser_title">Open the official website?</string>
+    <string name="services_browser_note">The %1$s app could not be opened. You can open its official website in a browser instead.</string>
+    <string name="services_open_browser">Open in browser</string>
+    <string name="services_open_failed">Could not open the service. Check that an app or browser is available and try again.</string>
+    <string name="services_opening">Pausing Square before opening the service…</string>
 </resources>

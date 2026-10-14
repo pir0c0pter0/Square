@@ -2,7 +2,44 @@
 
 Plano da issue #1, elaborado em 14/10/2026 com cinco especialistas: produto e
 experiência, arquitetura Android, Spotify, YouTube e segurança/validação.
-Esta entrega é de planejamento; não altera o funcionamento do aplicativo.
+O planejamento foi seguido pela implementação da etapa 1, descrita abaixo.
+
+## Etapa 1 implementada
+
+Configurações → Serviços oferece atalhos para os aplicativos oficiais Spotify
+e YouTube Music. Se o app não puder abrir, a pessoa pode confirmar a abertura
+do site em um navegador. A descoberta do navegador usa uma consulta HTTPS
+neutra, para funcionar mesmo quando Square recebe links Spotify por padrão.
+
+Antes da saída, a interface aguarda o processamento de um comando de pausa
+local no serviço de reprodução. O comando preserva a fila e não pausa outro
+dispositivo Connect. Controlador ausente, falha ou demora superior a cinco
+segundos impede a abertura. Não há retomada automática acrescentada ao retorno.
+No Web Playback SDK, a execução efetiva da pausa JavaScript continua assíncrona.
+
+Há textos em português e inglês; os demais idiomas usam o fallback inglês.
+Botões reutilizam o estilo de Configurações, possuem papel acessível de botão
+e altura mínima de 48 dp. A implementação não lê novas contas ou assinaturas.
+
+### Revisão e verificação
+
+Cinco revisores examinaram Android/intents, playback, segurança, UX/acessibilidade
+e testes/requisitos. As revisões identificaram e levaram à correção da consulta
+de navegadores, pausa remota involuntária, controlador ausente e falha de pausa
+ocultada pelo motor Spotify.
+
+Oito testes JUnit da lógica de abertura passaram em execução Kotlin/JVM isolada,
+incluindo espera pela pausa e cancelamento. O adaptador de intents compilou
+isoladamente contra classes Android. A tentativa de testes e compilação completa
+pelo Gradle foi bloqueada pela ausência do SDK Android; não houve execução em
+aparelho/emulador, TalkBack ou confirmação visual da tela.
+
+Para executar pelo projeto em ambiente Android configurado:
+
+```bash
+./gradlew :app:testDebugUnitTest --tests dev.lelonio.square.ui.settings.ExternalMusicTest
+./gradlew :app:assembleDebug
+```
 
 ## Objetivo e interpretação
 
@@ -75,7 +112,7 @@ benefícios Premium.
 | 4. YouTube Premium | Distinguir conta conectada de assinatura; benefícios ficam no ambiente oficial, sem deduzir Premium de cookie |
 | 5. Segurança e validação | Não coletar segredos no hub; validar destino dos links, ausência de aplicativo e isolamento de sessões em etapa futura |
 
-## Experiência da primeira versão proposta
+## Experiência da primeira versão
 
 1. Em Configurações, abrir uma seção “Serviços”. Mostrar “Abrir Spotify” e
    “Abrir YouTube Music”, com explicação curta de que cada conta e assinatura
@@ -100,16 +137,17 @@ e a [visibilidade de pacotes](https://developer.android.com/training/package-vis
 
 | Etapa | Entrega | Condição de saída |
 |---|---|---|
-| 0 — Planejamento (esta issue) | Diagnóstico, cinco pareceres, decisão, escopo e validação | Documento revisável e versionado, sem nova funcionalidade de reprodução |
-| 1 — Atalhos (issue futura) | Seção Serviços e abertura externa, sem APIs ou novas contas | Critérios A1–A5 abaixo verificados em Android |
+| 0 — Planejamento | Diagnóstico, cinco pareceres, decisão, escopo e validação | Documento versionado |
+| 1 — Atalhos (implementada) | Seção Serviços e abertura externa, sem APIs ou novas contas | Validação A1–A5 em Android ainda pendente |
 | 2 — Viabilidade de integração | Confirmar por escrito com os provedores o caso de uso, permissões, distribuição e benefícios possíveis | Evidência de autorização e protótipo com APIs oficiais; se não viável, manter apenas os atalhos |
 | 3 — Integração interna, somente se autorizada | Duas contas independentes, busca/biblioteca por fonte e uma reprodução ativa | Critérios B1–B6, migração e testes com contas autorizadas |
 
-Não se atribuem prazos à autorização externa. A implementação dos atalhos deve
-usar Kotlin/Compose e intents já disponíveis, sem servidor, banco novo ou
-dependência adicional. Os candidatos são `ui/settings/SettingsScreen.kt`,
-recursos de texto, `app/src/main/AndroidManifest.xml` e o ponto existente de pausa no player;
-os arquivos efetivos serão definidos ao implementar a etapa 1.
+Não se atribuem prazos à autorização externa. A implementação dos atalhos usa
+Kotlin/Compose e intents existentes, sem servidor, banco novo ou dependência
+adicional. A tela fica em `ui/settings/SettingsScreen.kt`; a lógica e os intents
+ficam nos arquivos `ExternalMusic.kt` e `ExternalMusicLauncher.kt` da mesma pasta.
+`ui/SquareApp.kt` aguarda o comando local de `playback/MediaBrowseTree.kt`, que
+usou o caminho de pausa de `playback/LibrespotPlayer.kt`.
 
 Se a etapa 3 for autorizada, reutilizar `MusicBackend`, `BackendId`, PKCE e
 armazenamentos independentes. O
@@ -132,7 +170,7 @@ Ficam fora do escopo: fila mista, sobreposição/crossfade entre serviços,
 sincronização bidirecional, substituição automática de músicas, downloads
 Premium por terceiros, cobrança conjunta e armazenamento central de cookies.
 
-## Critérios de aceitação para implementação futura
+## Critérios de aceitação e validação
 
 | ID | Cenário | Resultado esperado |
 |---|---|---|
@@ -152,7 +190,8 @@ A1–A5 são a matriz mínima da etapa 1. Executar em Android 8 e Android 11+,
 incluindo leitor de tela, apps ausentes, falha de abertura e links Spotify com
 Square definido como receptor. B1–B6 só se aplicam à etapa autorizada; testar
 também troca rápida, encerramento do processo, acesso offline e conta sem
-benefício Premium. Esses testes são propostos, não executados nesta issue.
+benefício Premium. Os cenários Android são propostos; a execução isolada cobre
+a lógica de abertura.
 
 ## Riscos e perguntas ainda abertas
 
@@ -166,5 +205,6 @@ benefício Premium. Esses testes são propostos, não executados nesta issue.
   garantir que outro aplicativo estará autenticado ou que só haverá um áudio
   ativo fora do Square.
 
-O próximo trabalho concreto recomendado é a etapa 1, em issue separada. Esta
-issue entrega o plano solicitado e não habilita nenhuma das etapas futuras.
+O próximo trabalho concreto é validar a etapa 1 em Android usando A1–A5.
+As etapas de integração interna permanecem condicionadas à autorização dos
+provedores e não foram habilitadas nesta implementação.

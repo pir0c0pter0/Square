@@ -34,6 +34,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import kotlinx.coroutines.guava.await
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -1934,6 +1935,18 @@ fun SquareApp(
                                 onShowTutorial = { showTutorial = true },
                                 language = language,
                                 onLanguage = setLanguage,
+                                onPausePlayback = {
+                                    val controller = checkNotNull(player as? androidx.media3.session.MediaController)
+                                    val result = kotlinx.coroutines.withTimeout(5_000) {
+                                        controller.sendCustomCommand(
+                                            androidx.media3.session.SessionCommand(
+                                                dev.lelonio.square.playback.PAUSE_LOCAL_COMMAND,
+                                                android.os.Bundle.EMPTY,
+                                            ), android.os.Bundle.EMPTY,
+                                        ).await()
+                                    }
+                                    check(result.resultCode == androidx.media3.session.SessionResult.RESULT_SUCCESS)
+                                },
                                 onBack = { navController.popBackStack() },
                                 onYouTubeSignIn = { showYouTubeLogin = true },
                                 onYouTubeChannelChange = {

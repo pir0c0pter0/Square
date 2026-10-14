@@ -42,6 +42,9 @@
 - **YouTube Music**: the whole catalogue and the music videos, with no account
   needed. Sign in with Google to bring in your playlists, albums and followed
   artists.
+- **Settings → Services**: open the official Spotify or YouTube Music app,
+  with a confirmed browser fallback. Square pauses its local playback and
+  keeps its queue; subscriptions remain managed by each service.
 
 ### Player
 
@@ -211,7 +214,8 @@ in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 The [Spotify and YouTube Premium plan](docs/MULTI_SERVICOS.md) combines five
 specialist analyses, the current architecture, provider restrictions and
-acceptance criteria. It is a proposal, not an implemented playback feature.
+acceptance criteria. The initial service shortcuts are implemented; integrated
+multi-service playback remains conditional on provider authorization.
 
 ## Licence
 
