@@ -39,6 +39,7 @@ import dev.lelonio.square.playback.EffectPreset
 import dev.lelonio.square.playback.PlaybackService
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -288,6 +289,87 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         },
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    data class GeneralLibraryState(
+        val contents: dev.lelonio.square.data.LibraryContents = dev.lelonio.square.data.LibraryContents(),
+        val loading: Boolean = false,
+        val incomplete: Boolean = false,
+    )
+
+    private val _generalLibrary = MutableStateFlow(GeneralLibraryState())
+    val generalLibrary = _generalLibrary.asStateFlow()
+    private val librarySources = mutableMapOf<BackendId, dev.lelonio.square.data.LibraryContents>()
+    private var generalLibraryJob: Job? = null
+    private val libraryRevisions = mutableMapOf<BackendId, Int>()
+    private fun libraryRevision(id: BackendId): Int = if (id == BackendId.SPOTIFY)
+        container.tokenStore.sessionRevision.value else container.youtubeAccount.sessionRevision.value
+
+    /** Reads both accounts independently. Changing the playing source never clears this library. */
+    fun loadGeneralLibrary(force: Boolean = false) {
+        if (generalLibraryJob?.isActive == true && !force) return
+        generalLibraryJob?.cancel()
+        val enabled = BackendId.entries.filter {
+            if (it == BackendId.SPOTIFY) container.spotifySignedIn else container.youtubeAccount.isSignedIn
+        }
+        librarySources.keys.retainAll(enabled.toSet())
+        enabled.forEach { id ->
+            val revision = libraryRevision(id)
+            if (libraryRevisions[id] != revision) librarySources.remove(id)
+            libraryRevisions[id] = revision
+        }
+        if (BackendId.SPOTIFY in enabled && BackendId.SPOTIFY !in librarySources && container.activeBackend.id == BackendId.SPOTIFY) {
+            (_state.value as? UiState.Ready)?.let { saved ->
+                librarySources[BackendId.SPOTIFY] = dev.lelonio.square.data.LibraryContents(
+                    playlists = saved.playlists.filter { container.spotifyBackend.owns(it.uri) },
+                )
+            }
+        }
+        fun publish(loading: Boolean, incomplete: Boolean) {
+            val merged = BackendId.entries.fold(dev.lelonio.square.data.LibraryContents()) { all, id ->
+                all + (librarySources[id]?.takeIf { libraryRevisions[id] == libraryRevision(id) } ?: dev.lelonio.square.data.LibraryContents())
+            }
+            _generalLibrary.value = GeneralLibraryState(
+                merged.copy(playlists = withLocalFiles(merged.playlists)), loading, incomplete,
+            )
+        }
+        publish(loading = true, incomplete = false)
+        generalLibraryJob = viewModelScope.launch {
+            var incomplete = false
+            coroutineScope {
+                enabled.map { id -> launch {
+                    val backend = if (id == BackendId.SPOTIFY) container.spotifyBackend else container.youtubeBackend
+                    val revision = libraryRevision(id)
+                    val previous = librarySources[id] ?: dev.lelonio.square.data.LibraryContents()
+                    if (id == BackendId.SPOTIFY && !container.webApi.isReady) {
+                        PlaybackService.connect(getApplication())
+                        awaitEngine()
+                    }
+                    suspend fun <T> read(previousItems: List<T>, request: suspend () -> List<T>): List<T> = try {
+                        withTimeout(LIBRARY_TIMEOUT_MS) { request() }
+                    } catch (cancelled: CancellationException) {
+                        if (cancelled !is kotlinx.coroutines.TimeoutCancellationException) throw cancelled
+                        incomplete = true
+                        previousItems
+                    } catch (_: Exception) {
+                        incomplete = true
+                        previousItems
+                    }
+                    val lists = async { read(previous.playlists) { backend.playlists() } }
+                    val albums = async { read(previous.albums) { backend.savedAlbums() } }
+                    val artists = async { read(previous.artists) { backend.followedArtists() } }
+                    val tracks = async { read(previous.tracks) { backend.savedTracks() } }
+                    val contents = dev.lelonio.square.data.LibraryContents(
+                        lists.await(), albums.await(), artists.await(), tracks.await(),
+                    )
+                    ensureActive()
+                    if (revision != libraryRevision(id)) return@launch
+                    librarySources[id] = contents
+                    publish(loading = true, incomplete = incomplete)
+                } }.joinAll()
+            }
+            publish(loading = false, incomplete = incomplete)
+        }
+    }
 
     /**
      * The home feed's catalogue sections.
@@ -1080,14 +1162,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // which is slower but asks nothing of the Connect layer.
         val context = remote.realContext
         val tracks = runCatching {
-            if (context != null) container.activeBackend.tracksOf(context) else emptyList()
+            if (context != null) container.backendFor(context).tracksOf(context) else emptyList()
         }
             .onFailure { android.util.Log.w(TAG, "context unreadable: ${describe(it)}") }
             .getOrDefault(emptyList())
 
         val index = tracks.indexOfFirst { it.uri == remote.uri }
         if (tracks.isEmpty() || index < 0) {
-            val single = runCatching { container.activeBackend.tracksOf(remote.uri) }
+            val single = runCatching { container.backendFor(remote.uri).tracksOf(remote.uri) }
                 .getOrDefault(emptyList())
                 .ifEmpty { return@launch }
             _resumeHere.emit(ResumeHere(single, 0, null, remote.positionMs))
@@ -1218,7 +1300,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     ) {
         // The other source writes through its own account, to the lists it
         // says can be written to; they are asked for as the sheet opens.
-        val backend = container.activeBackend
+        val backend = container.backendFor(trackUri)
         if (backend.id != BackendId.SPOTIFY) {
             val writable = trackUri != null && backend.owns(trackUri) && backend.canEditPlaylists
             _addToPlaylist.value = AddToPlaylistState(
@@ -1241,7 +1323,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             open = asSheet,
             trackUri = trackUri,
             trackTitle = trackTitle,
-            playlists = (_state.value as? UiState.Ready)?.playlists.orEmpty(),
+            playlists = _generalLibrary.value.contents.playlists.filter { backend.owns(it.uri) },
             liked = trackUri != null && container.likedStore.isLiked(trackUri),
             error = when {
                 trackUri == null || !(trackUri.startsWith("spotify:track:") ||
@@ -1336,7 +1418,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _addToPlaylist.value =
                 current.copy(busy = playlist.uri, done = null, removed = null, error = null)
             viewModelScope.launch {
-                runCatching { container.activeBackend.addToPlaylist(playlist.uri, trackUri) }
+                runCatching { container.backendFor(playlist.uri).addToPlaylist(playlist.uri, trackUri) }
                     .onSuccess {
                         _addToPlaylist.value = _addToPlaylist.value.copy(busy = null, done = playlist.name)
                         _inPlaylists.value = _inPlaylists.value + trackUri
@@ -1577,7 +1659,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 is dev.lelonio.square.data.util.SpotifyLink.Album -> {
-                    val tracks = runCatching { container.activeBackend.tracksOf(link.uri) }.getOrDefault(emptyList())
+                    val tracks = runCatching { container.backendFor(link.uri).tracksOf(link.uri) }.getOrDefault(emptyList())
                     val albumDto = runCatching { container.api.album(link.id) }.getOrNull()
                     val first = tracks.firstOrNull()
                     val title = albumDto?.name ?: first?.album ?: string(R.string.album)
@@ -1594,7 +1676,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 is dev.lelonio.square.data.util.SpotifyLink.Playlist -> {
                     val playlistDto = runCatching { container.api.playlist(link.id) }.getOrNull()
-                    val tracks = runCatching { container.activeBackend.tracksOf(link.uri) }.getOrDefault(emptyList())
+                    val tracks = runCatching { container.backendFor(link.uri).tracksOf(link.uri) }.getOrDefault(emptyList())
                     val title = playlistDto?.name ?: string(R.string.playlist)
                     val subtitle = playlistDto?.description.orEmpty().ifBlank { string(R.string.playlist) }
                     val artworkUrl = playlistDto?.images?.firstOrNull()?.url ?: tracks.firstOrNull()?.artworkUrl
@@ -1608,7 +1690,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 is dev.lelonio.square.data.util.SpotifyLink.Artist -> {
                     val artistDto = runCatching { container.api.artist(link.id) }.getOrNull()
-                    val tracks = runCatching { container.activeBackend.tracksOf(link.uri) }.getOrDefault(emptyList())
+                    val tracks = runCatching { container.backendFor(link.uri).tracksOf(link.uri) }.getOrDefault(emptyList())
                     val title = artistDto?.name ?: tracks.firstOrNull()?.artist ?: string(R.string.artist)
                     val artworkUrl = artistDto?.images?.firstOrNull()?.url ?: tracks.firstOrNull()?.artworkUrl
                     val item = SearchItem(
@@ -2189,6 +2271,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             container.preferences.backend.drop(1).collect { reload() }
         }
+        viewModelScope.launch {
+            combine(container.tokenStore.sessionRevision, container.youtubeAccount.sessionRevision) { spotify, youtube ->
+                spotify to youtube
+            }.drop(1).collect { loadGeneralLibrary(force = true) }
+        }
 
         if (container.activeBackend.id != BackendId.SPOTIFY) {
             // No engine to authenticate, so nothing to send the service.
@@ -2204,6 +2291,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun logIn() {
         loginJob?.takeIf { it.isActive }?.let { return }
         loginJob = viewModelScope.launch {
+            PlaybackService.disconnectSpotify(getApplication())
+            dev.lelonio.square.auth.EngineCredentials.clear(getApplication())
+            librarySnapshotFile().delete()
             _state.value = UiState.Loading
             runCatching { SpotifyOAuth.authorize(getApplication()) }
                 .onSuccess {
@@ -2253,6 +2343,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         contextCache.clear()
         viewModelScope.launch { container.contextCache.clear() }
         librarySnapshotFile().delete()
+        PlaybackService.disconnectSpotify(getApplication())
+        librarySources.remove(BackendId.SPOTIFY)
+        loadGeneralLibrary(force = true)
         _playlist.value = PlaylistState()
         _feed.value = FeedState()
         // Signed out of Spotify while playing from somewhere else leaves that
@@ -2940,6 +3033,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** A link's own title, from whichever side of Spotify will say. */
     private suspend fun nameOf(uri: String): String? {
+        if (uri.startsWith("ytmusic:")) return container.youtubeBackend.playlists().firstOrNull { it.uri == uri }?.name
         val kind = kindOf(uri)
         val id = uri.substringAfterLast(':')
 
@@ -3953,7 +4047,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Reopening one counts as opening it, and that is exactly the playlist
         // the home page should keep at the front.
         container.playlistOrder.record(playlist.uri)
-        container.widgetPlaylists.record(playlist.uri, playlist.name, playlist.artworkUrl, container.activeBackend.id)
+        container.widgetPlaylists.record(playlist.uri, playlist.name, playlist.artworkUrl, container.backendFor(playlist.uri).id)
         dev.lelonio.square.widget.SquareWidget.refresh(getApplication())
 
         if (playlist.uri == LocalLibrary.CONTEXT_URI) {
@@ -4132,7 +4226,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // on their page. After the tracks, which read the same
                     // page and leave the answer behind for this to pick up.
                     if (kind == DetailKind.ARTIST) launch {
-                        val following = container.activeBackend.isFollowing(playlist.uri)
+                        val following = container.backendFor(playlist.uri).isFollowing(playlist.uri)
                             ?: return@launch
                         base = base.copy(following = following)
                         if (isActive && _playlist.value.uri == playlist.uri) {
@@ -4143,7 +4237,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // than page by page: the Spotify paths below are built
                     // around the Web API's paging and the access point's
                     // per-track lookups, neither of which exists here.
-                    val youtube = container.activeBackend as? dev.lelonio.square.backend.youtube.YouTubeBackend
+                    val youtube = container.backendFor(playlist.uri) as? dev.lelonio.square.backend.youtube.YouTubeBackend
                     val artistPage = if (kind == DetailKind.ARTIST && youtube != null) {
                         youtube.artistPage(playlist.uri)
                     } else {
@@ -4171,7 +4265,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // A YouTube Music list is kept like a Spotify one: read in
                     // full only when its first page says it has changed. Long
                     // lists are a page a hundred songs, asked one after another.
-                    val youtubeLists = container.activeBackend as? dev.lelonio.square.backend.youtube.YouTubeBackend
+                    val youtubeLists = container.backendFor(playlist.uri) as? dev.lelonio.square.backend.youtube.YouTubeBackend
                     val tracks = if (youtubeLists != null) {
                         val (stamp, fresh) = youtubeLists.tracksIfChanged(
                             playlist.uri,
@@ -4185,7 +4279,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                         fresh ?: cached
                     } else {
-                        container.activeBackend.tracksOf(playlist.uri)
+                        container.backendFor(playlist.uri).tracksOf(playlist.uri)
                     }
                     followKept(playlist.uri, tracks)
                     if (isActive && _playlist.value.uri == playlist.uri) {
@@ -4562,12 +4656,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val uri = _playlist.value.uri ?: return
         // The other source removes through its own account; the same
         // optimistic row going and coming back if it refuses.
-        if (!uri.startsWith("spotify:") && container.activeBackend.owns(uri)) {
+        if (!uri.startsWith("spotify:") && container.backendFor(uri).owns(uri)) {
             val before = _playlist.value.tracks
             _playlist.value = _playlist.value.copy(tracks = before.filterNot { it.uri == track.uri })
             invalidateContext(uri)
+            loadGeneralLibrary(force = true)
             viewModelScope.launch {
-                runCatching { container.activeBackend.removeFromPlaylist(uri, track.uri) }
+                runCatching { container.backendFor(uri).removeFromPlaylist(uri, track.uri) }
                     .onFailure {
                         android.util.Log.e(TAG, "remove from playlist failed: ${chain(it)}", it)
                         if (_playlist.value.uri == uri) {
@@ -4583,6 +4678,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val before = _playlist.value.tracks
         _playlist.value = _playlist.value.copy(tracks = before.filterNot { it.uri == track.uri })
         invalidateContext(uri)
+        loadGeneralLibrary(force = true)
 
         viewModelScope.launch {
             runCatching {
@@ -4615,16 +4711,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun canRemoveFrom(playlistUri: String?): Boolean {
         val uri = playlistUri ?: return false
         return if (uri.startsWith("spotify:")) {
-            container.activeBackend.id == BackendId.SPOTIFY
+            container.spotifyBackend.canWriteTo(uri)
         } else {
-            container.activeBackend.owns(uri) && container.activeBackend.canWriteTo(uri)
+            container.backendFor(uri).owns(uri) && container.backendFor(uri).canWriteTo(uri)
         }
     }
 
     /** Whether the active source's pages and songs can be kept on the phone. */
     fun canKeep(uri: String?): Boolean {
         val it = uri ?: return false
-        val backend = container.activeBackend
+        val backend = container.backendFor(it)
         return backend.owns(it) && when (backend.id) {
             // The official SDK streams and keeps nothing; see WebSdkRecovery.inUse.
             BackendId.SPOTIFY -> it.startsWith("spotify:") && !LocalLibrary.isSpotifyLocal(it) &&
@@ -4651,7 +4747,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Whether the active source takes a description, a visibility and a cover. */
-    val describesPlaylists: Boolean get() = container.activeBackend.describesPlaylists
+    val describesPlaylists: Boolean get() = container.backendFor(_editingPlaylist.value?.playlist?.uri).describesPlaylists
 
     /**
      * Makes a playlist, puts it at the top of the library and hands it to
@@ -4696,6 +4792,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     _creatingPlaylist.value = CreatePlaylistState()
+                    loadGeneralLibrary(force = true)
                     onCreated(created)
                 }
                 .onFailure {
@@ -4763,6 +4860,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _suggestions.value = _suggestions.value.copy(tracks = _suggestions.value.tracks.filterNot { it.uri == track.uri })
         _playlist.value = _playlist.value.copy(tracks = _playlist.value.tracks + track)
         invalidateContext(uri)
+        loadGeneralLibrary(force = true)
         viewModelScope.launch {
             runCatching { container.api.addToPlaylist(uri.substringAfterLast(':'), AddTracksRequestDto(listOf(track.uri))) }
                 .onFailure {
@@ -4794,7 +4892,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Opens the edit sheet, reading what the playlist has now where the source keeps it. */
     fun openEditPlaylist(playlist: CatalogPlaylist) {
-        val backend = container.activeBackend
+        val backend = container.backendFor(playlist.uri)
         val plain = dev.lelonio.square.backend.PlaylistDetails(playlist.name, "", false, playlist.artworkUrl)
         if (!backend.describesPlaylists) {
             _editingPlaylist.value = EditPlaylistState(playlist, details = plain)
@@ -4827,7 +4925,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val trimmed = name.trim()
         _editingPlaylist.value = editing.copy(busy = true, error = null)
         viewModelScope.launch {
-            val backend = container.activeBackend
+            val backend = container.backendFor(uri)
             runCatching { backend.updatePlaylist(uri, trimmed, description, public) }
                 .onSuccess {
                     (_state.value as? UiState.Ready)?.let { ready ->
@@ -4839,6 +4937,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         _playlist.value = _playlist.value.copy(name = trimmed, description = description.trim())
                     }
                     invalidateContext(uri)
+                    loadGeneralLibrary(force = true)
                     if (cover != null && backend.describesPlaylists) {
                         runCatching {
                             val jpeg = withContext(Dispatchers.Default) { coverJpeg(cover) }
@@ -4948,7 +5047,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _playlist.value = _playlist.value.copy(name = trimmed)
         }
 
-        runCatching { container.activeBackend.renamePlaylist(uri, trimmed) }
+        runCatching { container.backendFor(uri).renamePlaylist(uri, trimmed) }
             .onFailure {
                 android.util.Log.e(TAG, "rename playlist failed: ${chain(it)}", it)
                 val current = _state.value as? UiState.Ready
@@ -4957,6 +5056,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         invalidateContext(uri)
+        loadGeneralLibrary(force = true)
     }
 
     fun deletePlaylist(uri: String) = viewModelScope.launch {
@@ -4966,7 +5066,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _state.value = ready.copy(playlists = ready.playlists.filterNot { it.uri == uri })
         }
 
-        runCatching { container.activeBackend.deletePlaylist(uri) }
+        runCatching { container.backendFor(uri).deletePlaylist(uri) }
             .onFailure {
                 android.util.Log.e(TAG, "delete playlist failed: ${chain(it)}", it)
                 val current = _state.value as? UiState.Ready
@@ -4975,6 +5075,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
         invalidateContext(uri)
+        loadGeneralLibrary(force = true)
     }
 
     /** Drops a context from both caches so the next open re-reads it. */
@@ -4987,7 +5088,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // are read again on the next open, which the change above forces.
         if (!uri.startsWith("spotify:") && container.downloads.owners.value.containsKey(uri)) {
             viewModelScope.launch {
-                runCatching { container.activeBackend.tracksOf(uri) }
+                runCatching { container.backendFor(uri).tracksOf(uri) }
                     .onSuccess { followKept(uri, it) }
             }
         }
@@ -5419,7 +5520,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 for (wait in ALBUM_ASK_MS) {
                     delay(wait)
                     record = withContext(Dispatchers.IO) {
-                        runCatching { container.activeBackend.tracksOf(uri).firstOrNull()?.album }.getOrNull()
+                        runCatching { container.backendFor(uri).tracksOf(uri).firstOrNull()?.album }.getOrNull()
                     }.orEmpty()
                     if (record.isNotBlank()) break
                 }
@@ -5975,10 +6076,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         // The other source follows through its own account.
         if (!uri.startsWith("spotify:")) {
-            runCatching { container.activeBackend.setFollowing(uri, !was) }
+            runCatching { container.backendFor(uri).setFollowing(uri, !was) }
                 .onSuccess {
                     resetFollowedReleases()
                     loadFollowedArtists()
+                    loadGeneralLibrary(force = true)
                 }
                 .onFailure {
                     android.util.Log.e(TAG, "follow failed: ${chain(it)}", it)
@@ -6006,6 +6108,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .onSuccess {
                 resetFollowedReleases()
                 loadFollowedArtists()
+                loadGeneralLibrary(force = true)
             }
             .onFailure {
                 android.util.Log.e(TAG, "follow failed: ${chain(it)}", it)
@@ -6137,7 +6240,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * callback because readiness lives behind a JNI boolean.
      */
     private suspend fun awaitEngine(): Boolean = withTimeoutOrNull(ENGINE_TIMEOUT_MS) {
-        while (!NativeBridge.isConnected) {
+        while (!NativeBridge.isConnected || container.nativeSessionRevision != container.tokenStore.sessionRevision.value) {
             // The service clears the session when Spotify rejects it. Without
             // this check the UI would sit on "connecting" for the full timeout
             // and then report a connection problem, when the real answer is

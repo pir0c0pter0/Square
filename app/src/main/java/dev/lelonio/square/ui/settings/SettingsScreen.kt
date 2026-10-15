@@ -148,6 +148,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     /** Opens the Google sign-in web view; see YouTubeLoginScreen. */
     onYouTubeSignIn: () -> Unit = {},
+    onSpotifySignIn: () -> Unit = {},
     /** After switching channel: the library and the home belong to the new one. */
     onYouTubeChannelChange: () -> Unit = {},
 ) {
@@ -329,7 +330,8 @@ fun SettingsScreen(
         // Who this is, before anything that can be done about it. Nothing else
         // on the page is worth as much room: the picture and the name answer
         // the question people open this page with.
-        if (shown == SettingsPage.Account && showSpotify) item("account") {
+        if (shown == SettingsPage.Account) item("account") {
+            val spotifyReady = ready?.takeIf { showSpotify }
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -338,8 +340,8 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 dev.lelonio.square.ui.components.ProfilePicture(
-                    url = ready?.avatarUrl,
-                    name = ready?.displayName,
+                    url = spotifyReady?.avatarUrl,
+                    name = spotifyReady?.displayName,
                     size = 96.dp,
                     modifier = Modifier
                         .size(96.dp)
@@ -347,30 +349,31 @@ fun SettingsScreen(
                     decodeSize = 96.dp,
                 )
                 Text(
-                    ready?.displayName ?: stringResource(R.string.not_connected),
+                    spotifyReady?.displayName ?: stringResource(R.string.backend_spotify),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    if (ready != null) {
-                        stringResource(R.string.playlist_count, ready.playlists.size)
+                    if (spotifyReady != null) {
+                        stringResource(R.string.playlist_count, spotifyReady.playlists.size)
                     } else {
-                        stringResource(R.string.log_in_to_resume)
+                        stringResource(if (app.spotifySignedIn) R.string.connected else R.string.not_connected)
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = InkDim,
                 )
             }
-            Section(null) {
+            Section(stringResource(R.string.backend_spotify)) {
+                if (!app.spotifySignedIn) ActionRow(stringResource(R.string.log_in_with_spotify), false, onClick = onSpotifySignIn)
                 InfoRow(stringResource(R.string.connect_device), deviceName, icon = PhosphorIcons.Regular.DeviceMobile)
             }
         }
 
-        if (shown == SettingsPage.Account && showSpotify) groupHeading(Group.SETUP, open = "setup" in openGroups) { toggleGroup("setup") }
+        if (shown == SettingsPage.Account) groupHeading(Group.SETUP, open = "setup" in openGroups) { toggleGroup("setup") }
 
-        if (shown == SettingsPage.Account && showSpotify && "setup" in openGroups) groupItem("webapi", Group.SETUP) {
+        if (shown == SettingsPage.Account && "setup" in openGroups) groupItem("webapi", Group.SETUP) {
             Section(stringResource(R.string.web_api)) {
                 if (webApi.connected) {
                     InfoRow(stringResource(R.string.application), stringResource(R.string.connected))
@@ -390,7 +393,7 @@ fun SettingsScreen(
             }
         }
 
-        if (shown == SettingsPage.Account && showSpotify && "setup" in openGroups) groupItem("tutorial", Group.SETUP) {
+        if (shown == SettingsPage.Account && "setup" in openGroups) groupItem("tutorial", Group.SETUP) {
             Section(stringResource(R.string.guide)) {
                 ActionRow(stringResource(R.string.see_setup_again), destructive = false) {
                     onShowTutorial()
@@ -398,7 +401,7 @@ fun SettingsScreen(
             }
         }
 
-        if (shown == SettingsPage.Account && showSpotify && "setup" in openGroups) groupEnd(Group.SETUP)
+        if (shown == SettingsPage.Account && "setup" in openGroups) groupEnd(Group.SETUP)
 
         if (shown == SettingsPage.Playback) groupHeading(Group.SOUND, open = "sound" in openGroups) { toggleGroup("sound") }
 
@@ -934,7 +937,7 @@ fun SettingsScreen(
         // Spotify's sign-out, so only while Spotify is the source. On YouTube
         // Music the account section above has its own, and this one signed the
         // app out of Spotify from a page about a Google account.
-        if (ready != null && shown == SettingsPage.Account && showSpotify) {
+        if (app.spotifySignedIn && shown == SettingsPage.Account) {
             item("logout") {
                 Section(null) {
                     ActionRow(stringResource(R.string.log_out), destructive = true, onClick = onLogOut)
@@ -1317,7 +1320,6 @@ private fun YouTubeAccountSection(onSignIn: () -> Unit, onChannelChange: () -> U
         context.applicationContext as dev.lelonio.square.SquareApplication
     }
     val backend by app.preferences.backend.collectAsStateWithLifecycle()
-    if (backend != BackendId.YOUTUBE_MUSIC) return
 
     val account = remember(app) { app.youtubeAccount }
     val name by account.accountName.collectAsStateWithLifecycle()

@@ -7,9 +7,6 @@ import dev.lelonio.square.data.SearchItem
 import dev.lelonio.square.data.SearchResults
 import kotlinx.coroutines.flow.StateFlow
 
-/** Which backend supplies catalogue and playback. */
-enum class BackendId { SPOTIFY, YOUTUBE_MUSIC }
-
 /** Where a [MusicBackend] stands with its own account/session. */
 sealed interface BackendAuthState {
     data object LoggedOut : BackendAuthState
@@ -119,6 +116,9 @@ interface MusicBackend {
 
     /** The signed-in account's own playlists; empty when logged out or unsupported. */
     suspend fun playlists(): List<CatalogPlaylist>
+
+    /** Saved songs, presented together in the general library. */
+    suspend fun savedTracks(): List<CatalogTrack> = emptyList()
 
     /**
      * The backend's own home page, as it chooses to lay it out.

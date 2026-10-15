@@ -35,8 +35,10 @@
 
 ### Two sources, one app
 
-- **Spotify or YouTube Music**, chosen at first launch and switchable in the
-  settings. Home, search, the library and the player work the same on both.
+- **Spotify and YouTube Music in one library**: playlists, saved albums,
+  followed artists and saved/liked songs from both connected accounts. A small
+  source icon identifies each item; opening or playing it selects its service.
+  The source chosen in settings still controls home and search.
 - **Spotify**: your own account, with its playlists, library and Connect
   devices. Needs Premium.
 - **YouTube Music**: the whole catalogue and the music videos, with no account
@@ -206,6 +208,12 @@ development on [Ko-fi](https://ko-fi.com/lelonio).
 
 Requirements, build steps, signing, the architecture and notes on the code are
 in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+
+## Unified library
+
+Connect Spotify and Google independently in Settings → Account, then open
+Library to browse both collections together. The [multi-service guide](docs/MULTI_SERVICOS.md)
+describes the behavior, five specialist reviews and device validation steps.
 
 ## Licence
 

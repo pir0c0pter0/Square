@@ -865,6 +865,17 @@ class LibrespotPlayer(
         return Futures.immediateVoidFuture()
     }
 
+    /** Park this device without sending pause to a different Connect device. */
+    fun pauseLocalPlayback() {
+        if (remote != null) return
+        wantPlay = false
+        playWhenReady = false
+        onPlaybackActive(false)
+        focus.abandonFocus()
+        if (!awaitingEngine) NativeBridge.pause()
+        invalidateState()
+    }
+
     override fun handleStop(): ListenableFuture<*> {
         engine("stop") { NativeBridge.stop() }
         wantPlay = false

@@ -670,4 +670,9 @@
     <string name="link_copied_open_browser">Couldn\'t open the browser. The link is copied: paste it there.</string>
     <string name="youtube_signing_in">Signing in…</string>
     <string name="youtube_sign_in_private">Your password goes only to Google. Square keeps the session Google gives back.</string>
+
+    <string name="library_song_count">%1$d songs</string>
+    <string name="library_partial">Some library items could not be updated.</string>
+    <string name="library_original_order">Original order</string>
+    <string name="queue_same_source">Play this song to start a queue from its service.</string>
 </resources>

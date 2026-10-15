@@ -93,6 +93,9 @@ class YouTubeAccount(context: Context) {
         }
 
     /** Which one is being read, by page id; null is the personal channel. */
+    private val _sessionRevision = MutableStateFlow(0)
+    val sessionRevision: StateFlow<Int> = _sessionRevision.asStateFlow()
+
     private val _pageId = MutableStateFlow(prefs.getString(KEY_PAGE_ID, null))
     val pageId: StateFlow<String?> = _pageId.asStateFlow()
 
@@ -148,6 +151,7 @@ class YouTubeAccount(context: Context) {
         _pageId.value = pageId
         _accountName.value = name
         applyToInnerTube()
+        _sessionRevision.value++
     }
 
     /** Hands the stored session back to InnerTube, after a sign-in that was not kept. */
@@ -165,6 +169,7 @@ class YouTubeAccount(context: Context) {
             .commit()
         _accountName.value = name
         applyToInnerTube()
+        _sessionRevision.value++
     }
 
     /**
@@ -238,6 +243,7 @@ class YouTubeAccount(context: Context) {
             android.webkit.CookieManager.getInstance().removeAllCookies(null)
         }
         applyToInnerTube()
+        _sessionRevision.value++
     }
 
     private companion object {

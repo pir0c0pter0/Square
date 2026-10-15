@@ -605,4 +605,9 @@
     <string name="link_copied_open_browser">Não foi possível abrir o navegador. O link foi copiado: cole-o lá.</string>
     <string name="youtube_signing_in">Entrando…</string>
     <string name="youtube_sign_in_private">Sua senha vai só para o Google. O Square guarda a sessão que o Google devolve.</string>
+
+    <string name="library_song_count">%1$d músicas</string>
+    <string name="library_partial">Não foi possível atualizar parte da biblioteca.</string>
+    <string name="library_original_order">Ordem original</string>
+    <string name="queue_same_source">Toque esta música para iniciar uma fila do serviço dela.</string>
 </resources>

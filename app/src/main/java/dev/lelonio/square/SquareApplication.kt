@@ -83,7 +83,7 @@ class SquareApplication : Application(), ImageLoaderFactory {
             kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default,
         )
         dev.lelonio.square.playback.SessionKeeper.attach(offlineScope) {
-            preferences.backend.value == dev.lelonio.square.backend.BackendId.SPOTIFY && spotifySignedIn
+            spotifySignedIn
         }
         dev.lelonio.square.playback.NetworkWatch(this, offlineScope).start()
         offlineScope.launch {
@@ -127,6 +127,9 @@ class SquareApplication : Application(), ImageLoaderFactory {
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob()),
         )
     }
+
+    /** Binds the native catalogue to the current OAuth account, not just a live socket. */
+    @Volatile internal var nativeSessionRevision: Int? = null
 
     val tokenStore: TokenStore by lazy { TokenStore(this) }
 
@@ -337,5 +340,13 @@ class SquareApplication : Application(), ImageLoaderFactory {
         get() = when (preferences.backend.value) {
             dev.lelonio.square.backend.BackendId.SPOTIFY -> spotifyBackend
             dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC -> youtubeBackend
+        }
+
+    @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+    fun backendFor(uri: String?): dev.lelonio.square.backend.MusicBackend =
+        when (dev.lelonio.square.backend.backendIdOf(uri)) {
+            dev.lelonio.square.backend.BackendId.SPOTIFY -> spotifyBackend
+            dev.lelonio.square.backend.BackendId.YOUTUBE_MUSIC -> youtubeBackend
+            null -> activeBackend
         }
 }
